@@ -696,3 +696,11 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 ### 验证
 
 - 真实照片经 /api/stream-frame 上传返回 200 并生成 capture_id；40 MB 载荷仍被 413 拒绝；遥测端点 1.5 MB 仍 413；telemetry 测试模块通过。
+
+## 2026-10-05 浏览器控制跑通 HAC++ 全流程（5k 验证档）
+
+- 用 ZCode 内嵌浏览器驱动控制台完成全链路：SSH 配置导入建档案 → 数据盘探测 → 上传 drjohnson 100 张 → 服务器自动 COLMAP → HAC++ 5000 迭代 → 渲染评测。最终 PSNR 13.92 / SSIM 0.686 / LPIPS 0.530（27 MB 点云），产物在 LYH:/websplatserve/outputs/runs/drjohnson-hac-5k-manual。
+- 服务器准备：HAC++ 仓库同步至 /home/T0ng/HAC-plus-main；SHARC 环境补 cv2/tensorboard 并编译 gridencoder 子模块；安装 colmap+xvfb；修补 train.py 前向注解崩溃与 runtime_utils 版本硬守卫（放宽为警告）。
+- 过程中修复两个平台 bug（向导死锁 5ca4cda、上传 413 b145480）；发现两个待修问题：复用数据集扫描依赖算法族（向导第一步选不了算法导致永远为空）、预检失败提示不常驻。
+- OOM 教训：任务默认跑 GPU 0（被占卡），用档案"激活命令"export CUDA_VISIBLE_DEVICES=1 指定空闲卡；快速验证参数用 voxel_size 0.01（0.001 在该场景生成海量锚点）。
+- 完整报告与 18 张逐步截图：docs/HAC++全流程验证报告.md、docs/e2e-run-screenshots/。
