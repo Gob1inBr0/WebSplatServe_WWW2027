@@ -623,3 +623,22 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 基准分化验证：24k 行空间分布合成场景、目标 0.7、GPU 容量 6000 时，六策略产出 4 种不同的 (bytes, t50_view, t90_view) 签名（naive / bandwidth / viewport / full 各异；gpu、joint 在每行成本均匀的合成场景上与 bandwidth、viewport 重合属预期，单元测试已用异构成本清单证明其机制）。
 - 服务端在线验证：`GET /web/generated/server.log` 404、日志无完整令牌、manifest.json `no-cache`、base.bin `immutable`、Infinity 载荷 200、1MB body 413、部署证据导出正常。
 - LYH 服务器（Ubuntu 22.04，Python 3.10）：preflight、冒烟、全量 9 模块全部通过。
+
+## 2026-10-04 新功能：控制台从本机 ~/.ssh/config 一键导入远程主机
+
+### 功能说明
+
+配置远程 GPU 服务器档案时，不再需要手动填地址/端口/用户/密钥路径，也不用翻终端历史找 ssh 命令：设置页新增"从 ~/.ssh/config 导入"控件，点击"读取主机"即列出本机 SSH 客户端配置里全部可导入的主机（别名、真实地址、端口、用户、密钥路径），选择后自动填入编辑中的档案（label 用别名，IdentityFile 写入 key_path）。
+
+### 实现
+
+- 新增 `web/server/ssh_config_import.py`：OpenSSH 客户端配置解析器。遵循 ssh 语义——同一别名字段首值优先；`Host` 行支持多别名与 `=` 语法；跳过含 `*`/`?`/`!` 的模式项与整个 `Match` 块（条件配置不适用于导入）；`Include` 指令按 OpenSSH 规则展开（相对路径相对 ~/.ssh，支持 glob，上限 64 个文件防止循环/滥用）。只返回配置元数据，绝不读取或返回密钥内容。
+- 新增 `GET /api/ssh-config/hosts`（与其他 /api 路由同样受令牌保护，未认证返回 401）。
+- 控制台设置页（`web/console/js/pages/settings.js`）在粘贴 SSH 命令的旁边新增导入控件：读取主机 → 下拉选择 → 导入。中英双语词条已加（`set.sshConfig*`）。
+- 说明：向导页里的 `quickConnect` 粘贴建档代码是未挂模板的残留，本次未动；档案管理入口统一在设置页。
+
+### 验证记录
+
+- 新增测试模块 `web/tools/test_ssh_config_import.py`（6 组断言：基本字段与别名回退、首值优先、通配符/排除模式跳过、多别名共享与 Match 跳过、`=` 语法与键名大小写、Include 跟随与文件缺失容错），已注册进 `run_tests.py`。
+- 本机与 LYH 服务器各 10 个测试模块全部通过；api.js / settings.js / i18n.js 通过 node 语法检查。
+- 本机服务实测：接口返回真实 ~/.ssh/config 中的 LYH、4D、github.com、small5090 等主机且字段正确；无令牌请求 401。

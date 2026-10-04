@@ -2023,6 +2023,15 @@ class ApiHandler(SimpleHTTPRequestHandler):
       self.end_headers()
       self.wfile.write(body)
       return
+    if parsed.path == "/api/ssh-config/hosts":
+      # Token-gated: returns host metadata from the server machine's
+      # ~/.ssh/config for one-click import in the console. Only aliases,
+      # addresses, ports, users and key *paths* are returned — never key
+      # contents, and the file is never written to.
+      from web.server.ssh_config_import import list_ssh_config_hosts
+      result = list_ssh_config_hosts()
+      json_response(self, {"ok": True, **result})
+      return
     if parsed.path == "/api/algorithms":
       algorithms = list_adapters()
       json_response(self, {"algorithms": algorithms, "validation": [validate_adapter(item) for item in algorithms]})

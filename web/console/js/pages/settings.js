@@ -3,6 +3,7 @@
 
 import { store, persistProfiles, persistPrefs, defaultProfile, activeProfile, sessionPasswords, toast, navigate } from "../store.js";
 import { parseSshCommand } from "../ssh-parse.js";
+import { getSshConfigHosts } from "../api.js";
 import { t } from "../i18n.js";
 
 const { ref, computed } = Vue;
@@ -43,6 +44,38 @@ export default {
       if (!editing.value.label) editing.value.label = parsed.host;
       pasteSsh.value = "";
       toast(t("wiz.profileCreated"), "success");
+    }
+
+    /* import a host straight from the server machine's ~/.ssh/config */
+    const sshHosts = ref([]);
+    const sshHostsLoading = ref(false);
+    const sshHostsLoaded = ref(false);
+    const pickedSshHost = ref("");
+    async function loadSshHosts() {
+      sshHostsLoading.value = true;
+      try {
+        const data = await getSshConfigHosts();
+        sshHosts.value = data.hosts || [];
+        sshHostsLoaded.value = true;
+        pickedSshHost.value = "";
+        if (!sshHosts.value.length) toast(t("set.sshConfigEmpty"), "info");
+      } catch (err) {
+        toast(`${t("set.sshConfigFail")} ${err.message}`, "error");
+      } finally {
+        sshHostsLoading.value = false;
+      }
+    }
+    function applySshHost() {
+      const entry = sshHosts.value.find((h) => h.alias === pickedSshHost.value);
+      if (!entry) { toast(t("set.sshConfigPick"), "error"); return; }
+      if (!editing.value) newProfile();
+      editing.value.host = entry.hostname || entry.alias;
+      if (entry.port) editing.value.port = entry.port;
+      if (entry.user) editing.value.username = entry.user;
+      if (entry.identity_file) editing.value.key_path = entry.identity_file;
+      editing.value.label = entry.alias;
+      pickedSshHost.value = "";
+      toast(`${t("set.sshConfigImported")}: ${entry.alias}`, "success");
     }
 
     function saveProfile() {
@@ -96,6 +129,7 @@ export default {
       store, editing, pasteSsh, passwordInput, notifySupported, active, hasPassword,
       newProfile, editProfile, applyPaste, saveProfile, removeProfile, switchProfile,
       savePassword, askNotifyPermission, persistPrefs, navigate,
+      sshHosts, sshHostsLoading, sshHostsLoaded, pickedSshHost, loadSshHosts, applySshHost,
     };
   },
   template: `
@@ -141,6 +175,19 @@ export default {
               <div class="row" style="gap:8px">
                 <input class="input mono" style="flex:1" v-model="pasteSsh" placeholder="ssh -p 22 root@your.server" @keydown.enter="applyPaste" />
                 <ui-button icon="zap" @click="applyPaste">{{ $t("set.parse") }}</ui-button>
+              </div>
+            </ui-field>
+            <ui-field :label="$t('set.sshConfig')" :hint="$t('set.sshConfigHint')"
+                      style="margin-bottom:12px">
+              <div class="row" style="gap:8px">
+                <select class="input" style="flex:1" v-model="pickedSshHost" :disabled="!sshHosts.length">
+                  <option value="">{{ sshHosts.length ? $t("set.sshConfigPick") : $t("set.sshConfigNone") }}</option>
+                  <option v-for="h in sshHosts" :key="h.alias" :value="h.alias">
+                    {{ h.alias }} — {{ h.user ? h.user + "@" : "" }}{{ h.hostname || h.alias }}{{ h.port && h.port !== 22 ? ":" + h.port : "" }}
+                  </option>
+                </select>
+                <ui-button icon="download" :disabled="sshHostsLoading" @click="loadSshHosts">{{ sshHostsLoaded ? $t("set.reload") : $t("set.sshConfigLoad") }}</ui-button>
+                <ui-button variant="primary" icon="check" :disabled="!pickedSshHost" @click="applySshHost">{{ $t("set.sshConfigImport") }}</ui-button>
               </div>
             </ui-field>
             <div class="grid-3" style="margin-bottom:12px">

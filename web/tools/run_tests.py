@@ -20,6 +20,7 @@ TEST_MODULES = [
   "web.tools.test_flow_reset",
   "web.tools.test_job_cleanup",
   "web.tools.test_ply_quick_load",
+  "web.tools.test_ssh_config_import",
   "web.tools.test_telemetry",
   "web.tools.test_web_export",
   "web.tools.test_websplatserve_manifest",
