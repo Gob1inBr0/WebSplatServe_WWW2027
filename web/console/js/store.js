@@ -85,6 +85,28 @@ export function persistProfiles() {
   saveJson(ACTIVE_KEY, store.activeProfileId);
 }
 
+/* One-time migration for profiles saved before the 2026-10 path redesign:
+   the shipped defaults pointed bulk data into /tmp (reboot-wiped). Rewrite
+   only the exact old defaults / empty values to the derived safe paths —
+   user-customized paths are never touched. */
+const LEGACY_DEFAULT_WORKSPACE = "/tmp/web_scan/workspaces";
+const LEGACY_DEFAULT_OUTPUT = "/tmp/web_scan/outputs";
+(function migrateLegacyProfilePaths() {
+  let changed = false;
+  for (const profile of store.profiles) {
+    const derived = deriveDataPaths(profile.username);
+    if (profile.workspace_root === LEGACY_DEFAULT_WORKSPACE || !profile.workspace_root) {
+      profile.workspace_root = derived.workspace_root;
+      changed = true;
+    }
+    if (profile.output_root === LEGACY_DEFAULT_OUTPUT || !profile.output_root) {
+      profile.output_root = derived.output_root;
+      changed = true;
+    }
+  }
+  if (changed) saveJson(PROFILES_KEY, store.profiles);
+})();
+
 export function persistPrefs() {
   saveJson(PREFS_KEY, store.prefs);
 }
