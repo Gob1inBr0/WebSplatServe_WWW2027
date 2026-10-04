@@ -54,21 +54,27 @@
         line(`start ${policy}`);
         await sleep(seconds * 1000);
         let telemetry = null;
+        let viewerErrors = [];
         try {
-          telemetry = iframe.contentWindow.__webgsTelemetry();
+          const win = iframe.contentWindow;
+          telemetry = win.__webgsTelemetry();
+          if (Array.isArray(win.__errors)) viewerErrors = win.__errors.slice(0, 10);
         } catch (err) {
           telemetry = { policy, error: String(err && err.message || err) };
         }
+        const incomplete = !telemetry || telemetry.ttfrMs === null || telemetry.ttfrMs === undefined;
         results.push({
           policy,
           capturedAt: new Date().toISOString(),
           durationSeconds: seconds,
+          incomplete,
+          viewerErrors,
           telemetry,
         });
-        const ttfr = telemetry && telemetry.ttfrMs !== null ? telemetry.ttfrMs : "n/a";
+        const ttfr = telemetry && telemetry.ttfrMs !== null && telemetry.ttfrMs !== undefined ? telemetry.ttfrMs : "n/a (not rendered within the window)";
         const bytes = telemetry ? telemetry.totalBytes : "n/a";
         const rows = telemetry ? telemetry.totalRows : "n/a";
-        line(`done ${policy}: TTFR=${ttfr}ms bytes=${bytes} rows=${rows}`);
+        line(`done ${policy}: TTFR=${ttfr}ms bytes=${bytes} rows=${rows}${incomplete ? " [incomplete]" : ""}${viewerErrors.length ? ` errors=${viewerErrors.length}` : ""}`);
       }
 
       async function runMatrix() {

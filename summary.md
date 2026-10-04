@@ -582,3 +582,44 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 
 - 在 LYH 服务器（可写运行目录）运行 `python3 web/tools/run_tests.py`（不带参数），9 个测试模块全部通过，其中包括此前因沙箱写权限限制一直无法完整验证的 5 个旧平台测试：detached_remote、flow_data、flow_reset、job_cleanup、ply_quick_load。
 - 至此三层验证全部闭环：单元测试（9 模块）、脚本冒烟（10 个脚本 × macOS/Linux 双平台）、模拟基准（6 策略 × 多网络矩阵）。
+
+## 2026-10-04 代码审查修复：调度语义、服务端安全与遥测聚合
+
+四路并行代码审查（调度核心 / 导出与基准工具 / 服务端与浏览器安全 / 脚本一致性）发现的问题已修复并全部重新验证。
+
+### 调度器（web/serving/adaptive_scheduler.py，重写模拟语义）
+
+- 策略停止条件（修 P0）：除 full（全量下载基线）外，五种策略在累计质量增益达到 `--quality-target`（默认 0.9）即停。此前所有策略都全量传输，六策略的 load_ms/bytes/rows 恒等，对比表自证其假。
+- 基础层强制先行（修 P1）：base 块无条件最先传输，TTFR 定义为 base 完成时刻（此前是任意首块，内存收紧时会先传增量块、算出不可能成立的 TTFR）。
+- GPU 信号回写（修 P1）：每传一块按驻留行数 / `gpu_capacity_rows` 重新估计 fps 与 P95 帧时间，gpu/joint 策略的降载判据在模拟里真正生效（此前是死代码，gpu 列等于 bandwidth 复读）。
+- 内存预算硬拦截（修 P1）：超预算的增量块直接跳过并计入 `budget_skips`，base 豁免；此前只降权不拦截。
+- 毫秒成本换算字节当量：打分公式里 decode/gpu 成本按当前带宽换算（λ=8、μ=2 保留），分母量纲统一；带宽 ≤0、RTT<0、目标超出 (0,1] 直接报错。
+- 新指标：视角加权质量（相机固定在默认机位）的 `view_gain_fraction` 与 `t50_view_ms`/`t90_view_ms` 到达时间，trace 增加 stage 与 view_gain 列——字节数相同的策略按"视角质量到达时间"区分。
+- naive 与 full 语义分离：naive 按清单顺序 + 质量目标停止；full 无视目标全量传输（无自适应基线）。
+- manifest.py：重复 chunk id 直接报错（此前静默丢块）；gpuCostMs 默认从 rows×0.0004 调到 rows×0.008（旧值在打分公式里只占 0.4%，gpu/joint 永远排不出差异）；schedulerHints 注明字节当量语义、并发改 1 与模拟一致。**注意：旧导出产物的 cost 字段是旧默认值，正式采数前需重新导出。**
+
+### 服务端安全（api_server.py / web_security.py）
+
+- 静态拒绝名单补 `generated/server.log`、`*.log`、`server.pid`（此前启动日志可被匿名下载，其中曾含完整令牌——P0）；启动输出令牌改为掩码（前6后4），curl 示例不再内嵌完整令牌。
+- token 比较改 `hmac.compare_digest`（恒时）。
+- 缓存头修正：一年 immutable 只给 `.bin`；`.json` 清单改 `no-cache, must-revalidate`（此前同 URL 重新导出后老访客一年拿旧数据）。
+- POST body 上限 1 MB（超限 413）、Content-Length 非数字返回 400（此前匿名端点可被声明长度无上限读入内存）。
+
+### 遥测（telemetry.py）与浏览器端（progressive.js / benchmark.html）
+
+- serving_load 新增 `stage`（first_frame/complete/failed）与 `benchmark` 白名单字段；summary 按 stage 分开聚合：TTFR 只统计首帧信标、bytes/帧时间只统计完成信标（此前一次加载计两次、bytes 混入部分值）、`by_policy` 等用户分布排除 benchmark 合成负载、新增 `loads_by_stage`/`benchmark_loads`。
+- 数值防御：JSON 里的 `Infinity`（此前 OverflowError 使匿名端点无响应）与 `NaN`（此前被钳成 10000）一律丢弃字段。
+- export 失败遥测只记异常类型名，不再记录含场景名的完整路径（隐私声明一致性）。
+- 设备分档修正：`deviceMemory==8` 不再判成笔记本核显（规范上限 8 表示"至少 8GB"）；负数 maxRows 不再冻结调度器。
+- benchmark=1 成为真实功能：manifest 与 chunk 请求带 `cache: "reload"`，保证矩阵测量不命中磁盘缓存；benchmark.html 采集 `__errors` 并把未在窗口内完成首帧的行标记 `incomplete`。
+
+### 脚本（scripts/*.sh）
+
+- 01/09 补 `--python` 参数解析（此前被静默忽略）；02 增加端口数值校验、启动失败的日志尾部诊断、令牌文件 chmod 600、读取时剥 PowerShell BOM、端口检测工具全缺时告警。
+
+### 验证记录
+
+- 本机（macOS，Python 3.13）：9 个测试模块全部通过；调度器测试新增 6 组断言（base-first 与 TTFR 定义、策略字节分化、内存跳过、gpu 反应、非法参数、重复 id），遥测新增 stage/benchmark 聚合与 Infinity/NaN 用例。
+- 基准分化验证：24k 行空间分布合成场景、目标 0.7、GPU 容量 6000 时，六策略产出 4 种不同的 (bytes, t50_view, t90_view) 签名（naive / bandwidth / viewport / full 各异；gpu、joint 在每行成本均匀的合成场景上与 bandwidth、viewport 重合属预期，单元测试已用异构成本清单证明其机制）。
+- 服务端在线验证：`GET /web/generated/server.log` 404、日志无完整令牌、manifest.json `no-cache`、base.bin `immutable`、Infinity 载荷 200、1MB body 413、部署证据导出正常。
+- LYH 服务器（Ubuntu 22.04，Python 3.10）：preflight、冒烟、全量 9 模块全部通过。

@@ -53,9 +53,12 @@ def test_serving_load_aggregation_and_device_classes() -> None:
         summary = store.summary()
         serving = summary["serving"]
         assert serving["loads"] == 4
-        assert serving["ttfr_ms"]["p50"] == 900
+        # Legacy events (no stage field) count as complete; the failed event is
+        # excluded from the ttfr/bytes statistics.
+        assert serving["loads_by_stage"] == {"first_frame": 0, "complete": 3, "failed": 1}
         assert serving["ttfr_ms"]["min"] == 500
-        assert serving["ttfr_ms"]["max"] == 1500
+        assert serving["ttfr_ms"]["max"] == 900
+        assert serving["bytes"]["count"] == 3
         assert serving["by_policy"] == {"joint": 3, "naive": 1}
         assert serving["failures_by_stage"] == {"manifest 404": 1}
 
@@ -72,10 +75,34 @@ def test_serving_load_aggregation_and_device_classes() -> None:
         assert classify_user_agent("")["device"] == "desktop"
 
 
+def test_staged_and_benchmark_events_are_aggregated_separately() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = TelemetryStore(directory=Path(tmp), enabled=True)
+        # One real user load: first-frame beacon (TTFR) + completion beacon (bytes).
+        store.record("serving_load", stage="first_frame", policy="joint", ttfr_ms=596, bytes=12_345)
+        store.record("serving_load", stage="complete", policy="joint", ttfr_ms=596, bytes=999_999)
+        # Synthetic benchmark load: must not pollute user-facing aggregates.
+        store.record("serving_load", stage="first_frame", policy="joint", ttfr_ms=50, bytes=1,
+                     benchmark=True)
+        store.record("serving_load", stage="complete", policy="joint", bytes=42, benchmark=True)
+
+        serving = store.summary()["serving"]
+        assert serving["loads"] == 4
+        assert serving["loads_by_stage"] == {"first_frame": 2, "complete": 2, "failed": 0}
+        assert serving["benchmark_loads"] == 2
+        # TTFR comes from first_frame beacons only, bytes from complete beacons
+        # only, and by_policy counts user loads only.
+        assert serving["ttfr_ms"] == {"count": 2, "min": 50, "p50": 50, "p95": 596, "max": 596}
+        assert serving["bytes"] == {"count": 2, "min": 42, "p50": 42, "p95": 999_999, "max": 999_999}
+        assert serving["by_policy"] == {"joint": 2}
+
+
 def test_client_event_sanitization_bounds_fields() -> None:
     good = sanitize_client_event({
         "type": "serving_load",
         "policy": "joint",
+        "stage": "first_frame",
+        "benchmark": True,
         "ttfr_ms": 596,
         "bytes": 123456,
         "failed": False,
@@ -87,6 +114,8 @@ def test_client_event_sanitization_bounds_fields() -> None:
     assert good is not None
     event_type, fields = good
     assert event_type == "serving_load"
+    assert fields["stage"] == "first_frame"
+    assert fields["benchmark"] is True
     assert fields["ttfr_ms"] == 596
     assert fields["rows"] == 999
     assert len(fields["fail_stage"]) == 40
@@ -98,6 +127,11 @@ def test_client_event_sanitization_bounds_fields() -> None:
     assert sanitize_client_event("not a dict") is None
     # out-of-range numbers get clamped, not rejected
     assert sanitize_client_event({"type": "serving_load", "ttfr_ms": 10**12})[1]["ttfr_ms"] == 24 * 3600 * 1000
+    # JSON's Infinity/1e999 parse to float inf, NaN must not be stored either —
+    # both are dropped instead of crashing the endpoint or poisoning stats.
+    sanitized = sanitize_client_event({"type": "serving_load", "ttfr_ms": float("inf"), "fps": float("nan")})
+    assert "ttfr_ms" not in sanitized[1] and "fps" not in sanitized[1]
+    assert sanitize_client_event({"type": "serving_load", "ttfr_ms": 10**400})[1].get("ttfr_ms") is None
 
 
 def test_retention_prunes_old_event_files() -> None:
@@ -129,12 +163,17 @@ def test_telemetry_dir_is_not_static_served() -> None:
 
     assert ApiHandler._static_path_denied(["generated", "telemetry", "events-20260101.jsonl"])
     assert ApiHandler._static_path_denied(["server", "telemetry.py"])
+    # The server's own stdout log (which contains the masked-token banner and
+    # request lines) and pid file must never be downloadable either.
+    assert ApiHandler._static_path_denied(["generated", "server.log"])
+    assert ApiHandler._static_path_denied(["generated", "server.pid"])
     assert not ApiHandler._static_path_denied(["generated", "web_exports", "scene-abc", "manifest.json"])
 
 
 def main() -> None:
     test_record_and_summary_roundtrip()
     test_serving_load_aggregation_and_device_classes()
+    test_staged_and_benchmark_events_are_aggregated_separately()
     test_client_event_sanitization_bounds_fields()
     test_retention_prunes_old_event_files()
     test_disabled_store_writes_nothing()

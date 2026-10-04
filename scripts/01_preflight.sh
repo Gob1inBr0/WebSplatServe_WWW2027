@@ -4,6 +4,14 @@
 set -euo pipefail
 
 PYTHON="${PYTHON:-python3}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --python) PYTHON="$2"; shift 2;;
+    -h|--help) echo "Usage: $0 [--python PATH]"; exit 0;;
+    *) echo "Unknown argument: $1" >&2; exit 1;;
+  esac
+done
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 

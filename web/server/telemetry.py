@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -47,6 +48,9 @@ CLIENT_EVENT_FIELDS = {
     "policy": (str, 16),
     "client_profile": (str, 40),
     "capability_class": (str, 40),
+    # first_frame = TTFR beacon, complete = all chunks delivered, failed = load error
+    "stage": (str, 16),
+    "benchmark": (bool,),
     "ttfr_ms": (int, 0, 24 * 3600 * 1000),
     "load_ms": (int, 0, 24 * 3600 * 1000),
     "bytes": (int, 0, 1 << 40),
@@ -249,21 +253,36 @@ class TelemetryStore:
             "t": event.get("t"), "path": event.get("p"), "status": status,
           })
 
-    ttfr_values = [int(e["ttfr_ms"]) for e in serving_events if isinstance(e.get("ttfr_ms"), int)]
-    byte_values = [int(e["bytes"]) for e in serving_events if isinstance(e.get("bytes"), int)]
-    frame_values = [int(e["p95_frame_ms"]) for e in serving_events if isinstance(e.get("p95_frame_ms"), int)]
+    def _load_stage(event: dict) -> str:
+      if event.get("failed"):
+        return "failed"
+      stage = str(event.get("stage") or "").strip()
+      return stage if stage in ("first_frame", "complete") else "complete"
+
+    stage_events = {name: [] for name in ("first_frame", "complete", "failed")}
+    for event in serving_events:
+      stage_events[_load_stage(event)].append(event)
+    benchmark_events = [e for e in serving_events if e.get("benchmark")]
+    user_events = [e for e in serving_events if not e.get("benchmark")]
+
+    # TTFR is a first-frame milestone; bytes/frame stats describe full loads.
+    # Legacy events (no stage field) count as complete so old data stays readable.
+    ttfr_source = stage_events["first_frame"] if stage_events["first_frame"] else stage_events["complete"]
+    ttfr_values = [int(e["ttfr_ms"]) for e in ttfr_source if isinstance(e.get("ttfr_ms"), int)]
+    byte_values = [int(e["bytes"]) for e in stage_events["complete"] if isinstance(e.get("bytes"), int)]
+    frame_values = [int(e["p95_frame_ms"]) for e in stage_events["complete"] if isinstance(e.get("p95_frame_ms"), int)]
     fail_reasons: dict = {}
     for event in serving_events:
       if event.get("failed") and event.get("fail_stage"):
         reason = str(event["fail_stage"])
         fail_reasons[reason] = fail_reasons.get(reason, 0) + 1
     policy_counts: dict = {}
-    for event in serving_events:
+    for event in user_events:
       policy = str(event.get("policy", "unknown"))
       policy_counts[policy] = policy_counts.get(policy, 0) + 1
     profile_counts: dict = {}
     capability_counts: dict = {}
-    for event in serving_events:
+    for event in user_events:
       profile = str(event.get("client_profile", "unknown"))
       capability = str(event.get("capability_class", "unknown"))
       profile_counts[profile] = profile_counts.get(profile, 0) + 1
@@ -293,6 +312,8 @@ class TelemetryStore:
       },
       "serving": {
         "loads": len(serving_events),
+        "loads_by_stage": {name: len(items) for name, items in sorted(stage_events.items())},
+        "benchmark_loads": len(benchmark_events),
         "ttfr_ms": _stats(ttfr_values),
         "bytes": _stats(byte_values),
         "p95_frame_ms": _stats(frame_values),
@@ -349,12 +370,18 @@ def sanitize_client_event(payload: dict) -> tuple[str, dict] | None:
         fields[name] = value
     elif rule[0] is int:
       try:
-        fields[name] = max(rule[1], min(rule[2], int(round(float(value)))))
-      except (TypeError, ValueError):
+        numeric = float(value)
+        if not math.isfinite(numeric):
+          continue
+        fields[name] = max(rule[1], min(rule[2], int(round(numeric))))
+      except (TypeError, ValueError, OverflowError):
         continue
     elif rule[0] is float:
       try:
-        fields[name] = max(rule[1], min(rule[2], float(value)))
-      except (TypeError, ValueError):
+        numeric = float(value)
+        if not math.isfinite(numeric):
+          continue
+        fields[name] = max(rule[1], min(rule[2], numeric))
+      except (TypeError, ValueError, OverflowError):
         continue
   return event_type, fields

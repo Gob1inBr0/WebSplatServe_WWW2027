@@ -5,6 +5,7 @@ enforcement, allowed result roots, and the shared JSON/error response builders.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -121,13 +122,14 @@ def request_origin_allowed(handler: "ApiHandler") -> bool:
 def request_token_valid(handler: "ApiHandler") -> bool:
   if not SECURITY_STATE["auth_enabled"]:
     return True
+  expected = str(SECURITY_STATE["token"])
   header_token = str(handler.headers.get("X-Auth-Token", "")).strip()
-  if header_token and header_token == SECURITY_STATE["token"]:
+  if header_token and hmac.compare_digest(header_token, expected):
     return True
   # Links opened via <a href> (log/csv downloads) cannot send headers; accept a query token.
   query = parse_qs(urlparse(handler.path).query)
   query_token = str(query.get("access_token", [""])[0]).strip()
-  return bool(query_token) and query_token == SECURITY_STATE["token"]
+  return bool(query_token) and hmac.compare_digest(query_token, expected)
 
 
 def allowed_result_roots() -> list:

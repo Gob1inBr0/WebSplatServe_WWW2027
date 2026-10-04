@@ -29,7 +29,8 @@ const params = new URLSearchParams(location.search);
 const POLICY = (params.get("policy") || "joint").toLowerCase();
 const PROFILE_PARAM = (params.get("profile") || "auto").toLowerCase();
 const BENCHMARK_MODE = params.get("benchmark") === "1";
-let MAX_ROWS = Number(params.get("maxRows") || 0) || Infinity;
+let MAX_ROWS = Number(params.get("maxRows") || 0);
+if (!Number.isFinite(MAX_ROWS) || MAX_ROWS <= 0) MAX_ROWS = Infinity; // reject negative/NaN caps
 
 const VALID = new Set(["naive", "bandwidth", "viewport", "gpu", "joint", "full"]);
 if (!VALID.has(POLICY)) {
@@ -347,7 +348,9 @@ function detectClientProfile() {
         id = profiles[PROFILE_PARAM] ? PROFILE_PARAM : "desktop_discrete_gpu";
     } else if (signals.mobileUa || (signals.deviceMemoryGb && signals.deviceMemoryGb <= 4)) {
         id = "android_mid_range";
-    } else if (signals.deviceMemoryGb && signals.deviceMemoryGb <= 8) {
+    } else if (signals.deviceMemoryGb && signals.deviceMemoryGb < 8) {
+        // deviceMemory is capped at 8 by spec ("at least 8 GB"), so an 8 must
+        // not demote a desktop machine to the integrated-GPU profile.
         id = "laptop_integrated_gpu";
     }
     const selected = profiles[id] || profiles.desktop_discrete_gpu;
@@ -385,6 +388,8 @@ function sendLoadBeacon(extra) {
         policy: POLICY,
         client_profile: telemetry.clientProfile ? telemetry.clientProfile.id : "unknown",
         capability_class: telemetry.capabilities && telemetry.capabilities.webgl2 ? "webgl2" : "unsupported",
+        stage: extra && extra.stage ? extra.stage : (extra && extra.failed ? "failed" : "complete"),
+        benchmark: BENCHMARK_MODE,
         ttfr_ms: telemetry.ttfrMs,
         load_ms: Math.round(performance.now() - telemetry.startedAt),
         bytes: telemetry.totalBytes,
@@ -437,7 +442,7 @@ async function main() {
     telemetry.clientProfile = detectClientProfile();
     telemetry.maxRowsCap = Number.isFinite(MAX_ROWS) ? MAX_ROWS : null;
 
-    const manifestResp = await fetch(manifestUrl);
+    const manifestResp = await fetch(manifestUrl, BENCHMARK_MODE ? { cache: "reload" } : {});
     if (manifestResp.status !== 200) throw new Error(`${manifestResp.status} unable to load manifest`);
     const manifest = await manifestResp.json();
     telemetry.manifestBytes = Number(manifestResp.headers.get("content-length") || 0);
@@ -587,7 +592,7 @@ async function main() {
                 document.getElementById("spinner").style.display = "none";
                 if (!clientLoadedBeaconed) {
                     clientLoadedBeaconed = true;
-                    sendLoadBeacon({ failed: false, chunks_total: chunkState.length });
+                    sendLoadBeacon({ stage: "first_frame", failed: false, chunks_total: chunkState.length });
                 }
             }
         }
@@ -727,7 +732,7 @@ async function main() {
         if (!pending.length) {
             if (!clientFinishedBeaconed && telemetry.chunkEvents.length && queue.size === 0) {
                 clientFinishedBeaconed = true;
-                sendLoadBeacon({ failed: false, chunks_total: chunkState.length });
+                sendLoadBeacon({ stage: "complete", failed: false, chunks_total: chunkState.length });
             }
             return;
         }
@@ -755,8 +760,8 @@ async function main() {
         const startedMs = performance.now() - telemetry.startedAt;
         try {
             const [rowsResp, shResp] = await Promise.all([
-                fetch(chunk.url),
-                chunk.shUrl ? fetch(chunk.shUrl) : Promise.resolve(null),
+                fetch(chunk.url, BENCHMARK_MODE ? { cache: "reload" } : {}),
+                chunk.shUrl ? fetch(chunk.shUrl, BENCHMARK_MODE ? { cache: "reload" } : {}) : Promise.resolve(null),
             ]);
             if (rowsResp.status !== 200) throw new Error(`chunk ${chunk.id}: ${rowsResp.status}`);
             const rowsBuf = await rowsResp.arrayBuffer();
@@ -900,6 +905,6 @@ main().catch((err) => {
     // broke, with the viewer's own words as the stage hint. Skip early URL
     // errors where the load never started (startedAt is still 0).
     if (telemetry.startedAt > 0) {
-        sendLoadBeacon({ failed: true, fail_stage: String(err && err.message || err).slice(0, 40) });
+        sendLoadBeacon({ stage: "failed", failed: true, fail_stage: String(err && err.message || err).slice(0, 40) });
     }
 });

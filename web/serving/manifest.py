@@ -29,6 +29,10 @@ def normalize_manifest(manifest: dict[str, Any], *, base_url: str = "") -> dict[
   chunks = manifest.get("chunks")
   if not isinstance(chunks, list) or not chunks:
     raise ValueError("manifest must contain a non-empty chunks array")
+  chunk_ids = [str(chunk.get("id")) if isinstance(chunk, dict) else "" for chunk in chunks]
+  duplicates = sorted({cid for cid, count in zip(chunk_ids, range(len(chunk_ids))) if chunk_ids.count(cid) > 1 and cid})
+  if duplicates:
+    raise ValueError(f"manifest chunk ids must be unique, duplicates: {', '.join(duplicates)}")
   normalized = dict(manifest)
   normalized.setdefault("version", MANIFEST_VERSION)
   normalized.setdefault("format", manifest.get("format", "splat-rows-v1"))
@@ -55,7 +59,10 @@ def normalize_chunk(chunk: dict[str, Any], *, base_url: str = "", ordinal: int =
   normalized["transferBytes"] = byte_size
   normalized["visualGain"] = gain
   normalized["decodeCostMs"] = round(float(chunk.get("decodeCostMs", rows * 0.002)), 4)
-  normalized["gpuCostMs"] = round(float(chunk.get("gpuCostMs", rows * 0.0004)), 4)
+  # 8 us/row keeps the GPU term visible next to ~224 transfer bytes/row in the
+  # byte-equivalent score; at 0.4 us/row the gpu/joint policies tracked plain
+  # bandwidth ordering.
+  normalized["gpuCostMs"] = round(float(chunk.get("gpuCostMs", rows * 0.008)), 4)
   normalized["quality"] = quality
   normalized.setdefault("dependencies", [])
   normalized.setdefault("cacheControl", "public, max-age=31536000, immutable")
@@ -80,12 +87,12 @@ def infer_quality_levels(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def default_scheduler_hints() -> dict[str, Any]:
   return {
     "objective": "minimize TTFR and time-to-usable-quality under network, viewport, FPS and memory constraints",
-    "score": "visualGain * viewWeight / (transferBytes + lambdaDecode * decodeCostMs + muGpu * gpuCostMs)",
+    "score": "visualGain * viewWeight / (transferBytes + lambdaDecode * decodeCostMs + muGpu * gpuCostMs), ms costs converted to byte equivalents at the current bandwidth",
     "lambdaDecode": 8.0,
     "muGpu": 2.0,
     "gpuGuardP95FrameMs": 34,
     "lowFpsThreshold": 24,
-    "defaultConcurrency": 4,
+    "defaultConcurrency": 1,
   }
 
 

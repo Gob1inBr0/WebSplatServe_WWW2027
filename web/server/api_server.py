@@ -30,6 +30,9 @@ from urllib.parse import parse_qs, urlparse
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 WEB_DIR = ROOT_DIR / "web"
+# Upper bound for JSON POST bodies; the anonymous telemetry beacon is the only
+# unauthenticated writer and needs a few KB at most.
+MAX_REQUEST_BODY_BYTES = 1_000_000
 STREAM_DIR = WEB_DIR / "generated" / "streams"
 DATASET_DIR = WEB_DIR / "generated" / "datasets"
 WORKSPACE_DIR = WEB_DIR / "generated" / "workspaces"
@@ -1877,8 +1880,13 @@ class ApiHandler(SimpleHTTPRequestHandler):
       return True
     if parts[0] in {"server", "tools", "config", "project_md", "_backup"}:
       return True
-    if len(parts) >= 2 and parts[0] == "generated" and parts[1] in ("job_logs", "telemetry"):
-      return True
+    if len(parts) >= 2 and parts[0] == "generated":
+      # Job state, telemetry, and the server's own stdout/stderr log (which
+      # must never be downloadable) all live directly under generated/.
+      if parts[1] in ("job_logs", "telemetry", "server.pid"):
+        return True
+      if parts[1].endswith(".log") or parts[1].endswith(".pid"):
+        return True
     return False
 
   def _security_gate(self, *, require_api_token: bool) -> bool:
@@ -1945,12 +1953,19 @@ class ApiHandler(SimpleHTTPRequestHandler):
 
   def end_headers(self) -> None:
     static_path = urlparse(self.path).path
+    # Only content-addressed binaries are immutable; manifests (fixed names,
+    # changing content on re-export) must be revalidated.
     cacheable_asset = (
       static_path.startswith("/web/generated/web_exports/")
       or static_path.startswith("/web/generated/websplatserve/")
-    ) and static_path.rsplit(".", 1)[-1].lower() in ("bin", "json")
+    ) and static_path.rsplit(".", 1)[-1].lower() == "bin"
     if cacheable_asset:
       self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+    elif static_path.endswith(".json") and (
+      static_path.startswith("/web/generated/web_exports/")
+      or static_path.startswith("/web/generated/websplatserve/")
+    ):
+      self.send_header("Cache-Control", "public, no-cache, must-revalidate, max-age=0")
     else:
       self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
       self.send_header("Pragma", "no-cache")
@@ -2158,7 +2173,26 @@ class ApiHandler(SimpleHTTPRequestHandler):
           os._exit(0)
       threading.Thread(target=_shutdown, daemon=True).start()
       return
-    length = int(self.headers.get("Content-Length", "0"))
+    try:
+      length = int(self.headers.get("Content-Length", "0"))
+    except (TypeError, ValueError):
+      error_response(
+        self,
+        code="WGSC-REQUEST-LENGTH-001",
+        step="request",
+        message="Invalid Content-Length header.",
+        status=400,
+      )
+      return
+    if length < 0 or length > MAX_REQUEST_BODY_BYTES:
+      error_response(
+        self,
+        code="WGSC-REQUEST-LENGTH-002",
+        step="request",
+        message=f"Request body too large (limit {MAX_REQUEST_BODY_BYTES} bytes).",
+        status=413,
+      )
+      return
     raw = self.rfile.read(length) if length else b"{}"
     try:
       payload = json.loads(raw.decode("utf-8") or "{}")
@@ -3461,10 +3495,12 @@ class ApiHandler(SimpleHTTPRequestHandler):
           "output_dir": str(out_dir),
         })
       except Exception as exc:
+        # Only the exception type is recorded: messages embed resolved PLY
+        # paths, and the telemetry policy forbids storing scene names.
         get_telemetry().record(
           "export_web",
           ok=False,
-          error=f"{type(exc).__name__}: {exc}",
+          error=type(exc).__name__,
           seconds=round(time.time() - export_started, 3),
         )
         error_response(
@@ -3532,9 +3568,12 @@ def main() -> None:
   )
   print(f"Serving web app at http://{args.host}:{args.port}/web/")
   if SECURITY_STATE["auth_enabled"]:
-    print(f"API access token: {token}")
+    # stdout/stderr may be redirected to a file; never print the full token
+    # there. The scripts echo the token to the interactive terminal instead.
+    masked = token[:6] + "..." + token[-4:] if len(token) > 12 else "***"
+    print(f"API access token: {masked} (full token in web/config/server.token)")
     print("The token is stored in web/config/server.token and injected into the served page automatically.")
-    print(f"curl example: curl -H 'X-Auth-Token: {token}' http://{args.host}:{args.port}/api/health")
+    print(f"curl example: curl -H 'X-Auth-Token: <see web/config/server.token>' http://{args.host}:{args.port}/api/health")
   else:
     print("WARNING: API token auth is DISABLED (--no-auth). Do not expose this server beyond loopback.")
   get_telemetry().record(
