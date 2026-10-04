@@ -1,0 +1,44 @@
+{
+  "client_profiles": [
+    {
+      "id": "desktop_discrete_gpu",
+      "label": "Desktop / discrete GPU",
+      "memory_budget_rows": 3000000,
+      "target_fps": 60,
+      "notes": "High-end desktop baseline for upper-bound WebGPU throughput."
+    },
+    {
+      "id": "laptop_integrated_gpu",
+      "label": "Laptop / integrated GPU",
+      "memory_budget_rows": 1200000,
+      "target_fps": 45,
+      "notes": "Resource-constrained browser client."
+    },
+    {
+      "id": "android_mid_range",
+      "label": "Android / mid-range SoC",
+      "memory_budget_rows": 500000,
+      "target_fps": 30,
+      "notes": "Stress case for mobile memory and frame-time stability."
+    }
+  ],
+  "network_profiles": [
+    { "id": "slow_4g", "bandwidth_mbps": 2, "rtt_ms": 120 },
+    { "id": "mobile_5g_moderate", "bandwidth_mbps": 10, "rtt_ms": 60 },
+    { "id": "wifi_fast", "bandwidth_mbps": 30, "rtt_ms": 30 },
+    { "id": "lan_upper_bound", "bandwidth_mbps": 100, "rtt_ms": 10 }
+  ],
+  "policies": ["full", "naive", "bandwidth", "viewport", "gpu", "joint"],
+  "paper_metrics": [
+    "TTFR",
+    "time_to_interactive",
+    "downloaded_bytes",
+    "chunk_arrival_time",
+    "fps",
+    "p95_frame_time",
+    "memory_budget_rows",
+    "failure_rate",
+    "cache_hit_rate",
+    "http_latency"
+  ]
+}

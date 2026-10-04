@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Runtime artifacts (keep directory skeleton via .gitkeep)
+web/generated/**
+!web/generated/**/
+!web/generated/**/.gitkeep
+
+# Local secrets
+web/config/server.token
+*.token
+
+# Logs
+*.log
+nohup.out
+
+# Paper exports (regenerable)
+deployment_evidence.md

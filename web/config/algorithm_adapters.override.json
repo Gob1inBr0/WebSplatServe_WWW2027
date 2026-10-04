@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "overrides": {
+    "gaussian-splatting-lightning": {
+      "repo_path": "C:\\Users\\chen\\Documents\\3DGS\\Web_Scan\\gaussian-splatting-lightning-main",
+      "default_cwd": "C:\\Users\\chen\\Documents\\3DGS\\Web_Scan\\gaussian-splatting-lightning-main"
+    },
+    "hac-plus-plus": {
+      "repo_path": "../HAC-plus-main",
+      "default_cwd": "../HAC-plus-main"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "profiles": [
+    {
+      "id": "vanilla-3dgs-sh",
+      "label": "Vanilla 3DGS SH PLY",
+      "representation": "sh",
+      "input_contract": "Standard binary_little_endian PLY with x/y/z, scale, rot, opacity, f_dc_* and f_rest_* fields.",
+      "serving_contract": "Direct WebSplatServe export into base/refinement/spatial chunks.",
+      "deployment_role": "Uncompressed or lightly processed baseline for Web delivery experiments."
+    },
+    {
+      "id": "compressed-decoded-sh",
+      "label": "Compressed backend decoded to SH PLY",
+      "representation": "sh",
+      "input_contract": "A compression backend such as HAC++, ContextGS or FCGS produces a decoded SH PLY or an equivalent materialized output.",
+      "serving_contract": "Run WebSplatServe export after backend decode/materialization; report backend decode time separately if measured.",
+      "deployment_role": "Shows that the serving layer can sit behind heterogeneous compression backends."
+    },
+    {
+      "id": "compact-pruned-sh",
+      "label": "Compact/pruned SH PLY",
+      "representation": "sh",
+      "input_contract": "A pruning or compaction backend produces a lower-row-count SH PLY.",
+      "serving_contract": "Use the same manifest/chunk protocol with stricter resident-row caps for mobile profiles.",
+      "deployment_role": "Stress-tests row-budget adaptation without changing the browser runtime."
+    }
+  ]
+}
+

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebSplatServe Benchmark</title>
+    <style>
+      html, body { margin: 0; min-height: 100%; background: #101418; color: #e5edf5; font-family: system-ui, sans-serif; }
+      main { display: grid; grid-template-columns: 320px 1fr; min-height: 100vh; }
+      aside { border-right: 1px solid #26313d; padding: 16px; background: #151b22; }
+      iframe { width: 100%; height: 100vh; border: 0; background: #000; }
+      h1 { font-size: 18px; margin: 0 0 14px; }
+      button { width: 100%; padding: 9px 10px; border: 1px solid #3e5168; background: #223044; color: #fff; border-radius: 6px; cursor: pointer; }
+      button + button { margin-top: 8px; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, Menlo, monospace; color: #b7c6d8; }
+      .k { color: #7d91a8; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <aside>
+        <h1>WebSplatServe Benchmark</h1>
+        <button id="run">Run Matrix</button>
+        <button id="download">Download JSON</button>
+        <pre id="log"></pre>
+      </aside>
+      <iframe id="viewer" title="benchmark viewer"></iframe>
+    </main>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const manifest = params.get("url");
+      const policies = (params.get("policies") || "naive,bandwidth,viewport,gpu,joint,full").split(",").map((x) => x.trim()).filter(Boolean);
+      const seconds = Math.max(3, Number(params.get("seconds") || 12));
+      const maxRows = params.get("maxRows") || "";
+      const results = [];
+      const iframe = document.getElementById("viewer");
+      const log = document.getElementById("log");
+
+      function line(text) {
+        log.textContent += text + "\n";
+      }
+
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      async function runOne(policy) {
+        const url = new URL("./progressive.html", location.href);
+        url.searchParams.set("url", manifest);
+        url.searchParams.set("policy", policy);
+        url.searchParams.set("benchmark", "1");
+        if (maxRows) url.searchParams.set("maxRows", maxRows);
+        iframe.src = url.href;
+        line(`start ${policy}`);
+        await sleep(seconds * 1000);
+        let telemetry = null;
+        try {
+          telemetry = iframe.contentWindow.__webgsTelemetry();
+        } catch (err) {
+          telemetry = { policy, error: String(err && err.message || err) };
+        }
+        results.push({
+          policy,
+          capturedAt: new Date().toISOString(),
+          durationSeconds: seconds,
+          telemetry,
+        });
+        const ttfr = telemetry && telemetry.ttfrMs !== null ? telemetry.ttfrMs : "n/a";
+        const bytes = telemetry ? telemetry.totalBytes : "n/a";
+        const rows = telemetry ? telemetry.totalRows : "n/a";
+        line(`done ${policy}: TTFR=${ttfr}ms bytes=${bytes} rows=${rows}`);
+      }
+
+      async function runMatrix() {
+        if (!manifest) {
+          line("missing ?url=<manifest.json>");
+          return;
+        }
+        results.length = 0;
+        log.textContent = "";
+        for (const policy of policies) {
+          await runOne(policy);
+        }
+        line("matrix complete");
+      }
+
+      function downloadJson() {
+        const blob = new Blob([JSON.stringify({ manifest, policies, seconds, results }, null, 2)], { type: "application/json" });
+        const anchor = document.createElement("a");
+        anchor.href = URL.createObjectURL(blob);
+        anchor.download = "websplatserve-browser-benchmark.json";
+        anchor.click();
+        URL.revokeObjectURL(anchor.href);
+      }
+
+      document.getElementById("run").addEventListener("click", runMatrix);
+      document.getElementById("download").addEventListener("click", downloadJson);
+      line(`policies: ${policies.join(", ")}`);
+      line(`seconds per policy: ${seconds}`);
+    </script>
+  </body>
+</html>
+

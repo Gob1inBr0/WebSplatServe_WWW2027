@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WebSplatServe Manifest",
+  "type": "object",
+  "required": ["version", "format", "vertexCount", "chunks"],
+  "properties": {
+    "version": { "type": "string" },
+    "format": { "type": "string" },
+    "servingModel": { "type": "string" },
+    "representation": { "type": "string" },
+    "vertexCount": { "type": "integer", "minimum": 1 },
+    "rowBytes": { "type": "integer", "minimum": 1 },
+    "shRowBytes": { "type": "integer", "minimum": 0 },
+    "schedulerHints": { "type": "object" },
+    "qualityLevels": { "type": "array" },
+    "chunks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "url", "rows", "bytes"],
+        "properties": {
+          "id": { "type": "string" },
+          "url": { "type": "string" },
+          "shUrl": { "type": "string" },
+          "rows": { "type": "integer", "minimum": 1 },
+          "bytes": { "type": "integer", "minimum": 1 },
+          "shBytes": { "type": "integer", "minimum": 0 },
+          "transferBytes": { "type": "integer", "minimum": 1 },
+          "contentHash": { "type": "string" },
+          "shContentHash": { "type": "string" },
+          "cacheKey": { "type": "string" },
+          "cacheControl": { "type": "string" },
+          "visualGain": { "type": "number" },
+          "decodeCostMs": { "type": "number" },
+          "gpuCostMs": { "type": "number" },
+          "quality": { "type": "integer", "minimum": 0 },
+          "dependencies": { "type": "array", "items": { "type": "string" } },
+          "region": {
+            "type": "object",
+            "properties": {
+              "center": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+              "radius": { "type": "number" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
