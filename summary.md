@@ -577,3 +577,8 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 证据链：bogus 端口 0.00 秒"连通"（本地代答）→ `route get` 走 utun1024 → mihomo socket API `mode: global` → 日志实锤 `36.138.63.143:65022 using GLOBAL` → PATCH 切 rule 模式后 SSH 当场连通。
 - 同一时刻 ssh.github.com:443 认证正常，证明隧道与 SSH 转发本身没问题；此前 fork 会话的 MaxStartups/fail2ban 假设均未成立。
 - 验证期间临时把 Clash 切到规则模式，完成后已恢复全局模式。后续在服务器上做批量 SSH 操作前应先确认本机代理模式。
+
+### 补充：全量测试套件首次完整通过
+
+- 在 LYH 服务器（可写运行目录）运行 `python3 web/tools/run_tests.py`（不带参数），9 个测试模块全部通过，其中包括此前因沙箱写权限限制一直无法完整验证的 5 个旧平台测试：detached_remote、flow_data、flow_reset、job_cleanup、ply_quick_load。
+- 至此三层验证全部闭环：单元测试（9 模块）、脚本冒烟（10 个脚本 × macOS/Linux 双平台）、模拟基准（6 策略 × 多网络矩阵）。
