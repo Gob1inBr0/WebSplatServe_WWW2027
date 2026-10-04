@@ -561,3 +561,19 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
     ./WebSplatServe_WWW2027 LYH:/home/T0ng/
   ssh LYH 'cd /home/T0ng/WebSplatServe_WWW2027 && PYTHON=/home/T0ng/miniconda3/envs/DCCA/bin/python bash scripts/01_preflight.sh && bash scripts/10_smoke_local_pipeline.sh'
   ```
+
+## 2026-10-04 LYH 服务器验证完成 + 拒连根因定位
+
+### LYH 服务器实测结果
+
+- 项目已 rsync 部署到 `/home/T0ng/WebSplatServe_WWW2027`（1.9 MB，排除 .git/运行产物）。
+- `scripts/01_preflight.sh`：4 个测试模块全部通过（服务器 Ubuntu 22.04、系统 Python 3.10.12 + numpy 1.21.5；交接手册里的 conda 环境已不存在）。
+- `scripts/10_smoke_local_pipeline.sh`：合成 PLY → 导出 → joint 模拟 → 基准 CSV 全流程通过，TTFR 数值与 macOS 完全一致（62.9 ms）。
+- `scripts/02_start_server.sh` 启动与端口复用两条路径、`08` 部署证据导出、`03/07/09` 均在服务器上通过；验证后已停掉服务进程。bash 版脚本 Linux 兼容性验证完成。
+
+### 拒连根因（重要，已写入公用文档《科研工作/LYH服务器使用指南.md》§10）
+
+- 当天 LYH "连不上"与服务器无关：本机 Clash Verge 处于全局模式，所有流量（含中国 IP）经 TUN 送往所选香港节点，该节点到 LYH:65022 不通；报错 "Connection closed by 36.138.63.143" 中的"对方"实际是本机 TUN。
+- 证据链：bogus 端口 0.00 秒"连通"（本地代答）→ `route get` 走 utun1024 → mihomo socket API `mode: global` → 日志实锤 `36.138.63.143:65022 using GLOBAL` → PATCH 切 rule 模式后 SSH 当场连通。
+- 同一时刻 ssh.github.com:443 认证正常，证明隧道与 SSH 转发本身没问题；此前 fork 会话的 MaxStartups/fail2ban 假设均未成立。
+- 验证期间临时把 Clash 切到规则模式，完成后已恢复全局模式。后续在服务器上做批量 SSH 操作前应先确认本机代理模式。
