@@ -31,8 +31,17 @@ from urllib.parse import parse_qs, urlparse
 ROOT_DIR = Path(__file__).resolve().parents[2]
 WEB_DIR = ROOT_DIR / "web"
 # Upper bound for JSON POST bodies; the anonymous telemetry beacon is the only
-# unauthenticated writer and needs a few KB at most.
+# unauthenticated writer and needs a few KB at most. /api/stream-frame carries
+# base64-encoded photos (one JPEG can exceed 1 MB once encoded), so it gets
+# its own generous limit.
 MAX_REQUEST_BODY_BYTES = 1_000_000
+MAX_FRAME_BODY_BYTES = 32_000_000
+
+
+def _body_limit_for(path: str) -> int:
+  return MAX_FRAME_BODY_BYTES if path == "/api/stream-frame" else MAX_REQUEST_BODY_BYTES
+
+
 STREAM_DIR = WEB_DIR / "generated" / "streams"
 DATASET_DIR = WEB_DIR / "generated" / "datasets"
 WORKSPACE_DIR = WEB_DIR / "generated" / "workspaces"
@@ -2194,12 +2203,13 @@ class ApiHandler(SimpleHTTPRequestHandler):
         status=400,
       )
       return
-    if length < 0 or length > MAX_REQUEST_BODY_BYTES:
+    body_limit = _body_limit_for(parsed.path)
+    if length < 0 or length > body_limit:
       error_response(
         self,
         code="WGSC-REQUEST-LENGTH-002",
         step="request",
-        message=f"Request body too large (limit {MAX_REQUEST_BODY_BYTES} bytes).",
+        message=f"Request body too large (limit {body_limit} bytes).",
         status=413,
       )
       return
