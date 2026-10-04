@@ -531,3 +531,33 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
   - 旧测试 `detached_remote`、`flow_data`、`flow_reset`、`job_cleanup` 需要在 `web/generated/job_logs` 或 `web/generated/streams` 下动态创建随机子目录。
   - 当前 PowerShell/Python 进程对新复制目录的运行时写入被拒绝，因此这些旧测试在本会话中无法完整验证。
   - 该限制不影响新增 WebSplatServe 模块的导入、导出、调度和模拟验证；真实开发机/服务器上应使用正常可写工作目录运行全量测试。
+
+## 2026-10-04 bash 版运行脚本与仓库上传
+
+### 本轮新增改动
+
+- 新增 `scripts/01_preflight.sh` 至 `scripts/10_smoke_local_pipeline.sh` 共十个 bash 脚本，与同名 `.ps1` 功能一一对应，macOS 与 Linux 可用：
+  - 解释器默认 `python3`，可用环境变量 `PYTHON` 或 `--python` 参数覆盖。
+  - 参数从 PowerShell 的 `-Named` 形式改为 `--flag value` 形式，取值集合（六种策略、三种后端画像）保持一致校验。
+  - `02_start_server.sh`：令牌生成改用 `secrets.token_urlsafe`，端口检测按 lsof → ss → netstat 顺序回退，健康检查用 `curl`，服务进程用 `nohup` 后台启动并写日志到 `web/generated/server.log`；沿用 ps1 的"端口被占用则复用并校验令牌"逻辑。
+  - `10_smoke_local_pipeline.sh`：临时目录改用 `${TMPDIR:-/tmp}`，合成 PLY 通过环境变量传入内联 Python，避免路径引号问题。
+- 更新 `scripts/README.md`，补充 bash 用法一节。
+- 新增 `.gitignore`：排除 `__pycache__`、`.DS_Store`、运行产物（`web/generated/**` 仅保留 `.gitkeep` 骨架）、`server.token`、日志与生成的部署证据。
+- 初始化 git 仓库并推送至 `https://github.com/Gob1inBr0/WebSplatServe_WWW2027.git`（main 分支，commit 455e34b）。
+
+### 本轮验证记录（macOS，Python 3.13.12 + numpy 2.4.3）
+
+- `scripts/01_preflight.sh`：4 个测试模块（telemetry、web_export、websplatserve_manifest、websplatserve_scheduler）全部通过，语法检查通过。
+- `scripts/10_smoke_local_pipeline.sh`：160 行合成 PLY → 导出 4 个 chunk → joint 策略模拟（TTFR 62.9ms）→ 12 行基准 CSV，全流程通过。
+- `scripts/02_start_server.sh`：启动与端口复用两条路径均通过；`03`、`07` URL 打印正常；`08` 成功导出部署证据 markdown（遥测 15 条事件）；`09` 包装脚本通过。
+- 验证结束后已停止测试用服务进程。
+
+### 待办：LYH 服务器验证
+
+- 计划在 LYH 服务器（`~/.ssh/config` 别名，Ubuntu 22.04）上复跑 `01_preflight.sh` 与 `10_smoke_local_pipeline.sh` 验证 Linux 兼容性。
+- 当前连接在密钥交换前被服务器关闭（`kex_exchange_identification: Connection closed by remote host`），多次退避重试均失败，属服务器端问题（sshd 限流/封禁或服务异常）。服务器恢复后执行：
+  ```bash
+  rsync -a --exclude .git --exclude '__pycache__' --exclude 'web/generated/*/' \
+    ./WebSplatServe_WWW2027 LYH:/home/T0ng/
+  ssh LYH 'cd /home/T0ng/WebSplatServe_WWW2027 && PYTHON=/home/T0ng/miniconda3/envs/DCCA/bin/python bash scripts/01_preflight.sh && bash scripts/10_smoke_local_pipeline.sh'
+  ```
