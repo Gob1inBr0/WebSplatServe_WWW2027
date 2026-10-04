@@ -642,3 +642,23 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 新增测试模块 `web/tools/test_ssh_config_import.py`（6 组断言：基本字段与别名回退、首值优先、通配符/排除模式跳过、多别名共享与 Match 跳过、`=` 语法与键名大小写、Include 跟随与文件缺失容错），已注册进 `run_tests.py`。
 - 本机与 LYH 服务器各 10 个测试模块全部通过；api.js / settings.js / i18n.js 通过 node 语法检查。
 - 本机服务实测：接口返回真实 ~/.ssh/config 中的 LYH、4D、github.com、small5090 等主机且字段正确；无令牌请求 401。
+
+## 2026-10-04 控制台目录默认值重新设计（产品视角）
+
+### 旧默认的问题
+
+- `workspace_root=/tmp/web_scan/workspaces`、`output_root=/tmp/web_scan/outputs`：Linux 服务器上 /tmp 重启即清空（训练输出丢失）、常见为内存盘（容量受限，多 GB 数据集上传直接写爆）、部分发行版的 systemd-tmpfiles 还会按访问时间自动清理。把数据集和训练产物放这里是能毁实验的最危险默认。
+- 仓库路径占位符 `/root/autodl-tmp/Web_Scan`：绑定 AutoDL 单一供应商命名，且还是旧项目品牌。
+- 一次新建档案要独立做 4 个绝对路径决定，认知负担大。
+
+### 新设计（原则：数据永不落 /tmp；一次决定、处处派生；填多少算多少）
+
+- `store.js` 新增 `deriveDataPaths(username)`：按登录用户名推导——root 得 `/root/websplatserve/{workspaces,outputs}`，其他用户得 `/home/<user>/websplatserve/...`；用户名仅允许 `[A-Za-z0-9._-]`（剥掉 `~` 前缀），非法或空一律回退 `/root`，杜绝路径注入。默认值必须是绝对路径（服务端 PurePosixPath 直接进 SFTP，`~` 不展开）。
+- 新建档案与向导快捷建档都用推导值；设置页用户名字段联动：改动用户名时，若工作区/输出目录仍是"推导默认值"（正则识别）则跟随更新，用户自定义过的路径（如 /root/autodl-tmp/...）绝不被覆盖。
+- 防呆：工作区/输出目录落在 /tmp 或 /dev/shm 下时表单出现琥珀色警告（双语）。
+- 品牌与占位符：仓库路径占位符改为 `/root/autodl-tmp/WebSplatServe`。
+- 迁移：只影响新建档案，已保存档案不动。
+
+### 验证
+
+- node 语法检查四个前端文件全过；`deriveDataPaths` 六组边界（root/普通用户/`~`前缀/路径注入/空串）与"是否默认值"正则五组用例全部符合预期；Python 全量 10 模块不受影响。

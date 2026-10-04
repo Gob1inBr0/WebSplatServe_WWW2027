@@ -1,7 +1,7 @@
 // New Training wizard — three steps: Data → Algorithm → Submit.
 // One click on Submit runs precheck + preview + confirmation internally.
 
-import { store, remoteConfig, hasPassword, activeProfile, toast, setRunName, navigate, defaultProfile, pollOnce } from "../store.js";
+import { store, remoteConfig, hasPassword, activeProfile, toast, setRunName, navigate, defaultProfile, deriveDataPaths, pollOnce } from "../store.js";
 import { getAlgorithms, remoteCheck, previewRun, submitRun, streamFrame, materializeSession } from "../api.js";
 import { parseSshCommand } from "../ssh-parse.js";
 import { t } from "../i18n.js";
@@ -344,6 +344,9 @@ export default {
       profile.host = parsed.host;
       profile.port = parsed.port || 22;
       profile.username = parsed.username || "root";
+      const paths = deriveDataPaths(profile.username);
+      profile.workspace_root = paths.workspace_root;
+      profile.output_root = paths.output_root;
       profile.label = profile.host;
       store.profiles.push(profile);
       store.activeProfileId = profile.id;

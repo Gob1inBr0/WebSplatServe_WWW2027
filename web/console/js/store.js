@@ -109,7 +109,21 @@ export function runName(job) {
 
 /* ---------- connection profiles ---------- */
 
+// Bulk data must never live under /tmp (wiped on reboot, often RAM-backed and
+// size-capped) — see deriveDataPaths. Absolute paths only: the server passes
+// them to SFTP and shell commands verbatim, so "~" would break.
+export function deriveDataPaths(username) {
+  const clean = String(username || "").trim().replace(/^~/, "");
+  const home = /^[A-Za-z0-9._-]+$/.test(clean) && clean !== "" ? (clean === "root" ? "/root" : `/home/${clean}`) : "/root";
+  return {
+    data_root: `${home}/websplatserve`,
+    workspace_root: `${home}/websplatserve/workspaces`,
+    output_root: `${home}/websplatserve/outputs`,
+  };
+}
+
 export function defaultProfile() {
+  const paths = deriveDataPaths("root");
   return {
     id: "p-" + Math.random().toString(36).slice(2, 10),
     label: "",
@@ -117,8 +131,8 @@ export function defaultProfile() {
     port: 22,
     username: "root",
     repo_path: "",
-    workspace_root: "/tmp/web_scan/workspaces",
-    output_root: "/tmp/web_scan/outputs",
+    workspace_root: paths.workspace_root,
+    output_root: paths.output_root,
     python: "python3",
     activate_cmd: "",
     key_path: "",

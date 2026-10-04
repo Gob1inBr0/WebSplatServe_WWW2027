@@ -1,7 +1,7 @@
 // Settings — connection profiles (multi, ssh-command paste), password per
 // session, notifications, access info.
 
-import { store, persistProfiles, persistPrefs, defaultProfile, activeProfile, sessionPasswords, toast, navigate } from "../store.js";
+import { store, persistProfiles, persistPrefs, defaultProfile, activeProfile, sessionPasswords, toast, navigate, deriveDataPaths } from "../store.js";
 import { parseSshCommand } from "../ssh-parse.js";
 import { getSshConfigHosts } from "../api.js";
 import { t } from "../i18n.js";
@@ -106,6 +106,25 @@ export default {
       toast(`${t("set.switchedTo")} "${profile.label || profile.host}"`, "info");
     }
 
+    /* Re-derive the suggested data paths when the username changes, but only
+       while the fields still hold derived values — custom paths stay put. */
+    const DERIVED_PATH_RE = /^\/(?:root|home\/[A-Za-z0-9._-]+)\/websplatserve\/(?:workspaces|outputs)$/;
+    function onUsernameInput() {
+      if (!editing.value) return;
+      const paths = deriveDataPaths(editing.value.username);
+      if (DERIVED_PATH_RE.test(editing.value.workspace_root || "")) editing.value.workspace_root = paths.workspace_root;
+      if (DERIVED_PATH_RE.test(editing.value.output_root || "")) editing.value.output_root = paths.output_root;
+    }
+
+    const pathWarnings = computed(() => {
+      if (!editing.value) return [];
+      const unsafe = (p) => /^\/(?:tmp|dev\/shm)(?:\/|$)/.test(String(p || ""));
+      const hits = [];
+      if (unsafe(editing.value.workspace_root)) hits.push(`${t("set.pathUnsafeWarn")}: ${editing.value.workspace_root}`);
+      if (unsafe(editing.value.output_root)) hits.push(`${t("set.pathUnsafeWarn")}: ${editing.value.output_root}`);
+      return hits;
+    });
+
     function savePassword() {
       if (!active.value) { toast(t("set.needProfileFirst"), "error"); return; }
       sessionPasswords.set(active.value.id, passwordInput.value);
@@ -130,6 +149,7 @@ export default {
       newProfile, editProfile, applyPaste, saveProfile, removeProfile, switchProfile,
       savePassword, askNotifyPermission, persistPrefs, navigate,
       sshHosts, sshHostsLoading, sshHostsLoaded, pickedSshHost, loadSshHosts, applySshHost,
+      onUsernameInput, pathWarnings,
     };
   },
   template: `
@@ -195,16 +215,19 @@ export default {
               <ui-field :label="$t('set.host')" required><input class="input" v-model="editing.host" placeholder="connect.gpu-cloud.com" /></ui-field>
               <div class="grid-2" style="gap:8px">
                 <ui-field :label="$t('set.port')"><input class="input num" type="number" v-model.number="editing.port" /></ui-field>
-                <ui-field :label="$t('set.user')"><input class="input" v-model="editing.username" /></ui-field>
+                <ui-field :label="$t('set.user')" :hint="$t('set.userDeriveHint')"><input class="input" v-model="editing.username" @input="onUsernameInput" /></ui-field>
               </div>
             </div>
             <div class="grid-2" style="margin-bottom:12px">
-              <ui-field :label="$t('set.repoPath')" :hint="$t('set.repoPathHint')"><input class="input mono" v-model="editing.repo_path" placeholder="/root/autodl-tmp/Web_Scan" /></ui-field>
+              <ui-field :label="$t('set.repoPath')" :hint="$t('set.repoPathHint')"><input class="input mono" v-model="editing.repo_path" placeholder="/root/autodl-tmp/WebSplatServe" /></ui-field>
               <ui-field :label="$t('set.python')" :hint="$t('set.pythonHint')"><input class="input mono" v-model="editing.python" /></ui-field>
             </div>
-            <div class="grid-2" style="margin-bottom:12px">
+            <div class="grid-2" style="margin-bottom:4px">
               <ui-field :label="$t('set.workspaceRoot')" :hint="$t('set.workspaceHint')"><input class="input mono" v-model="editing.workspace_root" /></ui-field>
               <ui-field :label="$t('set.outputRoot')" :hint="$t('set.outputHint')"><input class="input mono" v-model="editing.output_root" /></ui-field>
+            </div>
+            <div v-if="pathWarnings.length" class="small" style="color:var(--warn,#e6b450);margin-bottom:12px">
+              <div v-for="w in pathWarnings" :key="w">⚠ {{ w }}</div>
             </div>
             <ui-field :label="$t('set.keyPath')" :hint="$t('set.keyPathHint')"
                       style="margin-bottom:12px">
