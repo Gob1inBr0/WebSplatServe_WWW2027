@@ -122,7 +122,13 @@ export default {
     const canNext = computed(() => {
       if (draft.step === 1) {
         if (draft.operationType === "compress") return draft.compressInputPath.trim().length > 0;
-        if (draft.source === "upload") return draft.materialized !== null;
+        if (draft.source === "upload") {
+          // Files picked + dataset named is enough: goNext runs the upload
+          // itself (button shows its loading state meanwhile). Requiring the
+          // upload receipt here dead-locked the wizard — the upload is only
+          // ever triggered from this very button.
+          return draft.files.length > 0 && draft.datasetName.trim().length > 0;
+        }
         return Boolean(draft.selectedRemoteDatasetId || draft.remoteDatasetPath.trim());
       }
       if (draft.step === 2) return Boolean(draft.family);
