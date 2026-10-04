@@ -59,6 +59,7 @@ from web.server.remote_executor import (
   check_remote_output_download,
   download_remote_output_directory,
   poll_remote_detached_job,
+  remote_disk_probe,
   remote_preflight_check,
   repair_remote_job_metrics,
   sanitize_remote_config,
@@ -2641,6 +2642,28 @@ class ApiHandler(SimpleHTTPRequestHandler):
         "step": "step1",
         "report": report,
       })
+      return
+
+    if parsed.path == "/api/remote-disk-probe":
+      # Light SSH probe: rank the remote machine's real filesystems so the
+      # console can suggest a data root on the biggest local disk.
+      try:
+        remote_config_input = extract_remote_config_input(payload)
+        report = remote_disk_probe(
+          remote_config=remote_config_input,
+          timeout_seconds=int(payload.get("timeout_seconds", 15) or 15),
+        )
+      except RemoteExecutionError as exc:
+        error_response(
+          self,
+          code=exc.code_hint or "WGSC-STEP4-DISKPROBE-001",
+          step="disk_probe",
+          message=str(exc),
+          reason=f"stage={exc.stage or 'unknown'}",
+          status=400,
+        )
+        return
+      json_response(self, {"ok": True, "disk": report})
       return
 
     if parsed.path == "/api/remote-check":

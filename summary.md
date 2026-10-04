@@ -662,3 +662,21 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 ### 验证
 
 - node 语法检查四个前端文件全过；`deriveDataPaths` 六组边界（root/普通用户/`~`前缀/路径注入/空串）与"是否默认值"正则五组用例全部符合预期；Python 全量 10 模块不受影响。
+
+## 2026-10-04 新功能：远程数据盘探测（接目录默认值设计）
+
+### 功能
+
+设置页档案编辑区新增"探测服务器数据盘"按钮：SSH 到目标机器执行 `df -P` + 读 `/proc/mounts`，把真实文件系统按剩余空间排序展示，并给出数据根目录建议。工作区/输出目录仍是推导默认值（或为空）时自动采用建议；用户已自定义路径则弹提示告知最大磁盘但保留原值。密码/密钥缺失或主机未填时按钮给出明确引导。
+
+### 实现
+
+- `web/server/remote_executor.py` 新增 `remote_disk_probe()` 与 `parse_disk_report()`：tmpfs/ramfs/devtmpfs 等伪文件系统一律排除（数据放 /tmp 的教训写进了过滤器）；NFS/CIFS 等网络文件系统参与展示与排序但不作为首选建议（本地盘优先）；`/proc`、`/sys`、`/dev`、`/run`、`/boot`、`/snap`、`/tmp`、docker/kubelet 目录前缀排除；挂载点八进制转义（`\040` 空格等）正确还原；只需连接字段即可调用（档案填一半也能探测）。
+- 新增 `POST /api/remote-disk-probe`（令牌保护，复用 RemoteExecutionError 错误风格）。
+- 控制台设置页加探测按钮与结果提示（`set.probe*` 双语词条）；`deriveDataPaths` 的"是否默认值"正则复用于采用/保留判断。
+
+### 验证
+
+- 新增测试模块 `web/tools/test_remote_disk_probe.py`（6 组：排序与本地盘优先建议、无 /proc/mounts 回退设备名过滤、`\040` 转义还原、纯网络盘仍给建议、空输出安全、tmpfs 排除），注册后本机 11 个测试模块全部通过；LYH 同步后同样全过。
+- 实测 LYH：正确返回唯一本地盘 `/`（ext4，147.5 GB 总量 / 12.9 GB 剩余，与交接手册一致），/dev/shm 未误入候选；无令牌请求 401。
+- 环境注记：本机 Clash 核心当晚已退出、TUN 路由消失，网络为纯直连，SSH 无需切代理模式（此前"先切规则再测再恢复"的流程仅在代理运行时需要）。

@@ -3625,3 +3625,156 @@ def repair_remote_job_metrics(
     }
   finally:
     _close_ssh_resources(client, sftp)
+
+
+# ---------------- data-disk probe (console "detect data disk") ----------------
+
+_DISK_PROBE_COMMAND = (
+  "df -P; echo '--- websplatserve-fstab ---'; cat /proc/mounts 2>/dev/null || true"
+)
+
+# Pseudo filesystems can never host datasets; network filesystems may, but a
+# local disk is the safer default suggestion when one exists.
+_PSEUDO_FILESYSTEMS = {
+  "tmpfs", "devtmpfs", "ramfs", "proc", "sysfs", "devpts", "securityfs",
+  "cgroup", "cgroup2", "pstore", "bpf", "configfs", "fusectl", "hugetlbfs",
+  "mqueue", "debugfs", "tracefs", "squashfs", "iso9660", "efivarfs",
+  "binfmt_misc", "nsfs", "rpc_pipefs", "autofs", "none",
+}
+_NETWORK_FILESYSTEMS = {"nfs", "nfs4", "cifs", "smbfs", "ncpfs", "afs", "9p", "fuse.sshfs"}
+_PSEUDO_DEVICE_NAMES = {"tmpfs", "devtmpfs", "udev", "ramfs", "none"}
+_EXCLUDED_MOUNT_PREFIXES = (
+  "/proc", "/sys", "/dev", "/run", "/boot", "/efi", "/snap", "/tmp",
+  "/var/lib/docker", "/var/lib/kubelet",
+)
+
+
+def _unescape_mount_path(path: str) -> str:
+  # /proc/mounts (and df) escape special bytes octally; spaces are the common one.
+  return (
+    path.replace("\\040", " ")
+    .replace("\\011", "\t")
+    .replace("\\012", "\n")
+    .replace("\\134", "\\")
+  )
+
+
+def _classify_mount(mount: str, device: str, fstype: str) -> str:
+  """Return ok / pseudo / network for a mount point."""
+  normalized = "/" + mount.strip("/") if mount not in ("/",) else "/"
+  for prefix in _EXCLUDED_MOUNT_PREFIXES:
+    if normalized == prefix or normalized.startswith(prefix + "/"):
+      return "pseudo"
+  if fstype in _PSEUDO_FILESYSTEMS:
+    return "pseudo"
+  if not fstype and device in _PSEUDO_DEVICE_NAMES:
+    return "pseudo"
+  if fstype in _NETWORK_FILESYSTEMS:
+    return "network"
+  return "ok"
+
+
+def parse_disk_report(raw_output: str) -> Dict[str, Any]:
+  """Parse `df -P` + /proc/mounts output into ranked data-disk candidates."""
+  df_part = raw_output
+  fstypes: Dict[str, str] = {}
+  if "--- websplatserve-fstab ---" in raw_output:
+    df_part, _, mounts_part = raw_output.partition("--- websplatserve-fstab ---")
+    for line in mounts_part.splitlines():
+      cols = line.split()
+      if len(cols) < 3 or not cols[1].startswith("/"):
+        continue
+      mount = _unescape_mount_path(cols[1])
+      fstypes.setdefault(mount, cols[2])
+
+  candidates: list[Dict[str, Any]] = []
+  for line in df_part.splitlines()[1:]:
+    cols = line.split()
+    if len(cols) < 6:
+      continue
+    try:
+      total_kb = int(cols[1])
+      avail_kb = int(cols[3])
+    except ValueError:
+      continue
+    device = cols[0]
+    mount = _unescape_mount_path(" ".join(cols[5:]))
+    fstype = fstypes.get(mount, fstypes.get(mount.rstrip("/") + "/", ""))
+    kind = _classify_mount(mount, device, fstype)
+    if kind == "pseudo":
+      continue
+    candidates.append({
+      "mount": mount,
+      "fstype": fstype or "",
+      "device": device,
+      "total_gb": round(total_kb / 1024 / 1024, 1),
+      "free_gb": round(avail_kb / 1024 / 1024, 1),
+      "network": kind == "network",
+    })
+
+  candidates.sort(key=lambda item: item["free_gb"], reverse=True)
+  local = [item for item in candidates if not item["network"]]
+  pool = local or candidates
+  suggested_root = pool[0]["mount"] if pool else ""
+  return {
+    "candidates": candidates[:8],
+    "suggested_data_root": suggested_root,
+    "suggested_workspace_root": f"{suggested_root.rstrip('/')}/websplatserve/workspaces" if suggested_root else "",
+    "suggested_output_root": f"{suggested_root.rstrip('/')}/websplatserve/outputs" if suggested_root else "",
+  }
+
+
+def remote_disk_probe(
+  *,
+  remote_config: Dict[str, Any],
+  timeout_seconds: int = 15,
+) -> Dict[str, Any]:
+  """SSH in, rank the machine's real filesystems, suggest a data root.
+
+  Needs only connection fields — no repo/workspace paths, so it works on a
+  half-filled profile before any directory decisions are made.
+  """
+  host = str(remote_config.get("host", "")).strip()
+  if not host:
+    raise RemoteExecutionError(
+      "Remote host is required for the disk probe.",
+      code_hint="WGSC-STEP4-CONFIG-001",
+      stage="config",
+    )
+  validated = {
+    "host": host,
+    "port": int(remote_config.get("port", 22) or 22),
+    "username": str(remote_config.get("username", "")).strip() or "root",
+    "password": remote_config.get("password", ""),
+    "key_path": str(remote_config.get("key_path", "") or "").strip(),
+  }
+  paramiko = _load_paramiko()
+  client = _new_ssh_client(validated)
+  try:
+    try:
+      client.connect(
+        hostname=validated["host"],
+        port=validated["port"],
+        username=validated["username"],
+        **_connect_kwargs(validated),
+        timeout=timeout_seconds,
+      )
+      _, stdout, stderr = client.exec_command(_DISK_PROBE_COMMAND, timeout=timeout_seconds)
+      output = stdout.read().decode("utf-8", "replace")
+      err_text = stderr.read().decode("utf-8", "replace")
+      status = stdout.channel.recv_exit_status()
+      if status != 0 and not output.strip():
+        raise RemoteExecutionError(
+          f"Disk probe command failed: {err_text.strip()[:200]}",
+          code_hint="WGSC-STEP4-DISKPROBE-001",
+          stage="disk_probe",
+        )
+      return parse_disk_report(output)
+    except paramiko.AuthenticationException as exc:
+      raise RemoteExecutionError(
+        "SSH authentication failed. Check remote username/password.",
+        code_hint="WGSC-STEP4-SSH-AUTH-001",
+        stage="connect",
+      ) from exc
+  finally:
+    _close_ssh_resources(client)

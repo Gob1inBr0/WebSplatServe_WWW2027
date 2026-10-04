@@ -3,7 +3,7 @@
 
 import { store, persistProfiles, persistPrefs, defaultProfile, activeProfile, sessionPasswords, toast, navigate, deriveDataPaths } from "../store.js";
 import { parseSshCommand } from "../ssh-parse.js";
-import { getSshConfigHosts } from "../api.js";
+import { getSshConfigHosts, probeRemoteDisk } from "../api.js";
 import { t } from "../i18n.js";
 
 const { ref, computed } = Vue;
@@ -125,6 +125,52 @@ export default {
       return hits;
     });
 
+    /* Ask the remote machine where its biggest local disk is, then suggest
+       (or silently adopt, when the fields still hold derived values) that
+       data root. Never overrides user-customized paths. */
+    const probingDisk = ref(false);
+    const diskProbe = ref(null);
+    async function probeDataDisk() {
+      const profile = editing.value;
+      if (!profile || !profile.host.trim() || !profile.username.trim()) {
+        toast(t("set.probeNeedHost"), "error");
+        return;
+      }
+      if (!sessionPasswords.get(profile.id) && !String(profile.key_path || "").trim()) {
+        toast(t("set.probeNeedAuth"), "error");
+        return;
+      }
+      probingDisk.value = true;
+      try {
+        const data = await probeRemoteDisk({
+          host: profile.host,
+          port: Number(profile.port) || 22,
+          username: profile.username,
+          password: sessionPasswords.get(profile.id),
+          key_path: String(profile.key_path || "").trim(),
+        });
+        const disk = data.disk || {};
+        diskProbe.value = disk;
+        if (!disk.suggested_workspace_root) {
+          toast(t("set.probeNone"), "info");
+          return;
+        }
+        const stillDerived = !String(profile.workspace_root || "").trim()
+          || DERIVED_PATH_RE.test(profile.workspace_root);
+        if (stillDerived) {
+          profile.workspace_root = disk.suggested_workspace_root;
+          profile.output_root = disk.suggested_output_root;
+          toast(`${t("set.probeApplied")}: ${disk.suggested_data_root}`, "success", 8000);
+        } else {
+          toast(`${t("set.probeKeptCustom")}: ${disk.suggested_data_root}`, "info", 9000);
+        }
+      } catch (err) {
+        toast(`${t("set.probeFailed")} ${err.message}`, "error", 9000);
+      } finally {
+        probingDisk.value = false;
+      }
+    }
+
     function savePassword() {
       if (!active.value) { toast(t("set.needProfileFirst"), "error"); return; }
       sessionPasswords.set(active.value.id, passwordInput.value);
@@ -149,7 +195,7 @@ export default {
       newProfile, editProfile, applyPaste, saveProfile, removeProfile, switchProfile,
       savePassword, askNotifyPermission, persistPrefs, navigate,
       sshHosts, sshHostsLoading, sshHostsLoaded, pickedSshHost, loadSshHosts, applySshHost,
-      onUsernameInput, pathWarnings,
+      onUsernameInput, pathWarnings, probingDisk, diskProbe, probeDataDisk,
     };
   },
   template: `
@@ -222,12 +268,18 @@ export default {
               <ui-field :label="$t('set.repoPath')" :hint="$t('set.repoPathHint')"><input class="input mono" v-model="editing.repo_path" placeholder="/root/autodl-tmp/WebSplatServe" /></ui-field>
               <ui-field :label="$t('set.python')" :hint="$t('set.pythonHint')"><input class="input mono" v-model="editing.python" /></ui-field>
             </div>
-            <div class="grid-2" style="margin-bottom:4px">
+            <div class="grid-2" style="margin-bottom:8px">
               <ui-field :label="$t('set.workspaceRoot')" :hint="$t('set.workspaceHint')"><input class="input mono" v-model="editing.workspace_root" /></ui-field>
               <ui-field :label="$t('set.outputRoot')" :hint="$t('set.outputHint')"><input class="input mono" v-model="editing.output_root" /></ui-field>
             </div>
-            <div v-if="pathWarnings.length" class="small" style="color:var(--warn,#e6b450);margin-bottom:12px">
+            <div v-if="pathWarnings.length" class="small" style="color:var(--warn,#e6b450);margin-bottom:8px">
               <div v-for="w in pathWarnings" :key="w">⚠ {{ w }}</div>
+            </div>
+            <div class="row" style="gap:8px;margin-bottom:14px">
+              <ui-button size="sm" icon="hard-drive" :disabled="probingDisk" @click="probeDataDisk">{{ probingDisk ? $t("set.probeDisking") : $t("set.probeDisk") }}</ui-button>
+              <span v-if="diskProbe && diskProbe.candidates && diskProbe.candidates.length" class="small muted">
+                {{ diskProbe.candidates.length }} {{ $t("set.probeFound") }}
+              </span>
             </div>
             <ui-field :label="$t('set.keyPath')" :hint="$t('set.keyPathHint')"
                       style="margin-bottom:12px">
