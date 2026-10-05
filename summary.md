@@ -758,3 +758,17 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 用户发现渲染视图是纯色。取回三轮渲染图对比（docs/e2e-run-screenshots/对比-*.png）：5k 快速档渲染图是几乎均匀的灰雾（1332×876 全图无结构），30k 正式档渲染出完整房间（绿墙/白门/桌椅/挂画清晰可辨），GT 原图正常——渲染管线无故障。
 - 原因是快速验证参数本身：5000 迭代太少，且当时把率失真权重 λ 提到 0.01（换取更小体积），模型远未收敛，渲染接近场景平均色；PSNR 15.43 与纯色渲染的预期一致。
 - 结论与建议：5k+λ0.01 仅用于验证流程通不通；要看像样的渲染视图请用标准 30k（PSNR 21.84，渲染正常），或至少 10k 迭代 + λ0.001。
+
+## 2026-10-05 全算法 × DB 两场景 30k 批量训练（全部页面点击提交）
+
+### 环境配置（能配多少配多少，结果：19/20 可用）
+
+- 磁盘清理后 21G 可用，采用轻量 venv 方案（共享 SHARC torch，每算法仅编译自有 CUDA 模块，200-800MB/个）。
+- 逐算法修复编译/依赖问题：15 处 FLT_MAX 缺 include（CUDA 12.8 不再传递定义）、taming 补 fused-ssim 子模块源码（本地与服务器均为空壳，从镜像仓库拉取）、GaussianPro 前向注解崩溃（同 HAC++ 修法）、ContextGS 的 torchac 需 cmake+清 JIT 缓存、EAGLES/SOG/GSLightning 各补 1-2 个 pip 包。
+- 最终：18 个算法环境 READY 并通过入口冒烟（vanilla-3dgs、GSLightning、MEGS-2、GaussianSpa、Scaffold-GS、reduced-3dgs、HAC、HAC++、ContextGS、CompGS、RDO、Octree-GS、GaussianPro、AtomGS、Taming3DGS、SOG、LightGaussian、Mini-Splatting、EAGLES）；FCGS 为特殊包装管线部分可用；hemgs/codecgs/mesongs/gaussian-splatting-web 无公开代码跳过。
+
+### 训练提交（全部模拟页面点击）
+
+- drjohnson 17 个算法 + playroom 18 个算法 = 35 个 tmux 任务全部通过向导点击提交（新建训练→复用数据集→选算法→标准 30k→预检→启动→确认），每条提交前 touch RELEASE-2..7 释放占卡器，动态选卡 wrapper 把任务分散到空闲卡。
+- 已知排期事项：lightgaussian 是剪枝型算法需要 checkpoint，待 vanilla-3dgs 30k 完成后补提交；35 个任务在 7-8 张卡上时间片轮转，预计数小时内陆续完成；个别任务在致密化阶段可能 OOM，失败的可等卡空闲后从页面重提。
+- 每条提交记录：drjohnson 顺序 vanilla/taming/mini/eagles/reduced/gslightning/megs2/gaussianspa/scaffold/rdo/octree/gaussianpro/atomgs/compgs/hac/contextgs/sog；playroom 同序 + hac++。
