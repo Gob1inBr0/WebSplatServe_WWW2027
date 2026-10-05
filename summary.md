@@ -746,3 +746,9 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 修复：/home/T0ng/bin/python-gpu1 包装脚本补 PATH（SHARC env bin），tmc3 v23.0 可解析。
 - 原命令重跑成功：30000 迭代全部完成，PSNR 21.84 / SSIM 0.787 / LPIPS 0.333，bitstreams 码流与点云产物齐全（/websplatserve/outputs/runs/test2-hac-plus-plus-20261005T070538Z）。GPCC 压缩步（7000/12000 步测试点）均通过。
 - 注：重跑在服务器侧执行，控制台该运行仍显示失败状态；再次从 UI 提交同参数将直接成功。
+
+## 2026-10-05 最终验收：纯页面操作全流程成功
+
+- 用户要求"人在页面上点一点就完成，页面显示成功"。以内嵌浏览器代行页面操作完成验收轮：复用列表选择 drjohnson 数据集（自动预选 HAC++）→ 自定义 5000 迭代/体素 0.01 → 提交 → 预检通过 → tmux 启动 → 运行页"运行中" → 约 8 分钟后自动变"已完成" → 下载结果后页面显示 PSNR 15.43 / SSIM 0.7010 / 18.8 MB、完整 loss 曲线与渲染缩略图（截图 30/31）。
+- 复用路径实测耗时：列表加载 ~8 秒，训练 ~7 分钟（无 COLMAP，直接用现成稀疏结果），结果回传 ~30 秒。
+- 此前所有失败记录（04:50 版本守卫 / 05:02 OOM / test2 GPCC）的根因均已修复并有成功轮佐证；旧失败行作为历史记录保留。
