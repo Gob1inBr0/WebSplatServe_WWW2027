@@ -192,9 +192,14 @@ export default {
       window.open(url, "_blank");
     }
 
+    /* Break long paths only at separators so wraps land between directories */
+    function breakPath(value) {
+      return String(value || "").replace(/([\/._-])/g, "\u200B$1");
+    }
+
     return {
       store, filter, filtered, drawerId, drawerJob, drawerName, logText, metricsSeries,
-      renderImages, downloadPct, drawerBusy, formatBytes, formatTime, jobLogDownloadUrl,
+      renderImages, downloadPct, breakPath, drawerBusy, formatBytes, formatTime, jobLogDownloadUrl,
       openDrawer, closeDrawer, doCancel, doDownload, doDelete, renameRun, openInViewer, openImage, navigate, pollOnce, isTerminal, runName,
     };
   },
@@ -282,8 +287,8 @@ export default {
 
           <ui-card :title="$t('runs.paths')" dense>
             <dl class="kv">
-              <dt>{{ $t("runs.remoteOutput") }}</dt><dd class="mono">{{ drawerJob.output_dir || "-" }}</dd>
-              <dt>{{ $t("runs.localResult") }}</dt><dd class="mono">{{ drawerJob.local_result_dir || drawerJob.output_dir || "-" }}</dd>
+              <dt>{{ $t("runs.remoteOutput") }}</dt><dd class="mono path-text">{{ breakPath(drawerJob.output_dir) || "-" }}</dd>
+              <dt>{{ $t("runs.localResult") }}</dt><dd class="mono path-text">{{ breakPath(drawerJob.local_result_dir || drawerJob.output_dir) || "-" }}</dd>
             </dl>
           </ui-card>
 

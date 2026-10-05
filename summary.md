@@ -723,3 +723,10 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 实测结论：修复本身已生效（导航项零截断、clamp 变量在位），用户截图中的截断来自浏览器里尚未刷新的旧版 JS/CSS（旧导航标记没有省略号保护节点）。
 - 加固：index.html 的四个静态资源引用加 ?v= 时间戳查询参数，此后任何样式/脚本更新一次刷新必定生效；components.css 再补两层保护（nav-item overflow hidden、页脚状态文字显式 min-width:0）。
 - 用户侧操作：在出现截断的窗口做一次强制刷新（Cmd+Shift+R / Ctrl+F5）即可。
+
+## 2026-10-05 补记：找到并修掉竖向"截断"的真正根因
+
+- 根因：抽屉内容区（.drawer-body）与侧栏是纵向 flex 容器，空间不足时卡片被 flex 默认收缩等比压扁，卡片自身 overflow hidden 圆角裁切把内容切掉——图表压成 40px 细条、正方形缩略图变成 22px 扁条、矮窗口下侧栏同样被压。
+- 修复：`.drawer-body > *` 与 `.shell-sidebar > *` 设 flex-shrink: 0——容器宁可内部滚动，绝不压扁卡片（实测抽屉内容 979px 在 570px 视口内正常滚动，图表卡 109→248px 完整渲染，缩略图恢复 128×128）。
+- 路径折行同时修好：runs 页路径值在每个 / . _ - 分隔符处插入零宽断行点，折行只发生在目录边界；抽屉键值对改标签在上、值在下的单栏排版。
+- 资源版本号机制运转正常：两次改动后重载即生效。
