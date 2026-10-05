@@ -69,6 +69,7 @@ from web.server.remote_executor import (
   download_remote_output_directory,
   poll_remote_detached_job,
   remote_disk_probe,
+  remote_list_datasets,
   remote_preflight_check,
   repair_remote_job_metrics,
   sanitize_remote_config,
@@ -2652,6 +2653,28 @@ class ApiHandler(SimpleHTTPRequestHandler):
         "step": "step1",
         "report": report,
       })
+      return
+
+    if parsed.path == "/api/remote-datasets":
+      # Lightweight dataset scan for the wizard reuse step (needs connection
+      # fields + workspace_root only).
+      try:
+        remote_config_input = extract_remote_config_input(payload)
+        report = remote_list_datasets(
+          remote_config=remote_config_input,
+          timeout_seconds=int(payload.get("timeout_seconds", 20) or 20),
+        )
+      except RemoteExecutionError as exc:
+        error_response(
+          self,
+          code=exc.code_hint or "WGSC-STEP5-DATASET-LIST-001",
+          step="datasets",
+          message=str(exc),
+          reason=f"stage={exc.stage or 'unknown'}",
+          status=400,
+        )
+        return
+      json_response(self, {"ok": True, **report})
       return
 
     if parsed.path == "/api/remote-disk-probe":

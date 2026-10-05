@@ -730,3 +730,12 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 修复：`.drawer-body > *` 与 `.shell-sidebar > *` 设 flex-shrink: 0——容器宁可内部滚动，绝不压扁卡片（实测抽屉内容 979px 在 570px 视口内正常滚动，图表卡 109→248px 完整渲染，缩略图恢复 128×128）。
 - 路径折行同时修好：runs 页路径值在每个 / . _ - 分隔符处插入零宽断行点，折行只发生在目录边界；抽屉键值对改标签在上、值在下的单栏排版。
 - 资源版本号机制运转正常：两次改动后重载即生效。
+
+## 2026-10-05 修复："复用服务器上的数据"列表为空（两个叠加问题）
+
+用户实测复用路径报"Set up a connection profile and its password first"，修复发现两层问题叠加：
+
+1. **认证门控过严**：向导列表与提交都要求"会话密码或密钥路径"，但 SSH 默认密钥（~/.ssh/id_ed25519 等无显式配置的情况）不被尝试——而旧档案（新功能上线前建的）恰恰两者都没有。修复：服务端连接参数在无显式凭据时回退到默认密钥+agent（与 ssh 命令行行为一致）；validate_remote_config 不再硬性要求密码/密钥；向导两处前端门控放宽（有档案即可，认证失败由预检给出精确报错）。
+2. **扫描按算法族作用域**：数据集列表扫 datasets/<族>/，而向导第一步尚未选算法、族为空，永远扫不到。修复：族为空时遍历所有族目录合并扫描，结果条目携带 family 字段；前端选中数据集时自动预选该数据集所属算法族。
+3. 新增轻量接口 POST /api/remote-datasets（只需连接字段+workspace_root，不需要 repo/python 路径），向导复用列表改调它——数据集浏览不再依赖完整预检。
+- 实测：以用户档案形态（无密钥/无密码/无族）调用，默认密钥认证成功，正确返回 hac-plus-plus/drjohnson-preview-（undistorted_ready，100 帧）。本机与 LYH 各 11 个测试模块通过。

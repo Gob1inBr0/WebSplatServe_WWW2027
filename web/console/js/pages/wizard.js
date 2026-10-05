@@ -1,7 +1,8 @@
 // New Training wizard — three steps: Data → Algorithm → Submit.
 // One click on Submit runs precheck + preview + confirmation internally.
 
-import { store, remoteConfig, hasPassword, activeProfile, toast, setRunName, navigate, defaultProfile, deriveDataPaths, pollOnce } from "../store.js";
+import { store, remoteConfig, hasPassword, activeProfile, sessionPasswords, toast, setRunName, navigate, defaultProfile, deriveDataPaths, pollOnce } from "../store.js";
+import { listRemoteDatasets } from "../api.js";
 import { getAlgorithms, remoteCheck, previewRun, submitRun, streamFrame, materializeSession } from "../api.js";
 import { parseSshCommand } from "../ssh-parse.js";
 import { t } from "../i18n.js";
@@ -160,16 +161,19 @@ export default {
       draft.loadingRemoteDatasets = true;
       draft.remoteDatasets = [];
       try {
-        if (!profile.value || !hasPassword()) {
-          throw new Error("Set up a connection profile and its password first (Settings).");
+        if (!profile.value || !String(profile.value.host || "").trim()) {
+          throw new Error(t("wiz.needProfile"));
         }
-        const data = await remoteCheck({
-          remote: remoteConfig(),
-          timeout_seconds: 20,
+        const data = await listRemoteDatasets({
+          host: profile.value.host,
+          port: Number(profile.value.port) || 22,
+          username: profile.value.username,
+          password: sessionPasswords.get(profile.value.id),
+          key_path: String(profile.value.key_path || "").trim(),
+          workspace_root: profile.value.workspace_root,
           algorithm_family: draft.family || "",
-          include_datasets: true,
         });
-        draft.remoteDatasets = data.result?.datasets || [];
+        draft.remoteDatasets = data.datasets || [];
         if (!draft.remoteDatasets.length) toast(t("wiz.noDatasetsFound"), "info");
       } catch (err) {
         toast(`${t("wiz.listFailed")} ${err.message}`, "error", 7000);
@@ -245,7 +249,6 @@ export default {
     async function submitAll() {
       try {
         if (!profile.value) throw new Error(t("wiz.needProfile"));
-        if (!hasPassword()) throw new Error(t("wiz.needPassword"));
 
         draft.prechecking = true;
         draft.precheckResult = null;
@@ -461,7 +464,7 @@ export default {
           <div v-else class="stack" style="gap:8px">
             <button v-for="ds in draft.remoteDatasets" :key="ds.id" class="choice" style="padding:12px 16px"
                     :class="{ selected: draft.selectedRemoteDatasetId === ds.id }"
-                    @click="draft.selectedRemoteDatasetId = ds.id; draft.remoteDatasetPath = ds.path || ''">
+                    @click="draft.selectedRemoteDatasetId = ds.id; draft.remoteDatasetPath = ds.path || ''; draft.family = ds.family || draft.family">
               <div class="spread">
                 <div>
                   <div class="choice-title">{{ ds.name || ds.id }}</div>

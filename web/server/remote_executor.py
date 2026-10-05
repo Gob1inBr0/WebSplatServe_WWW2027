@@ -302,6 +302,11 @@ def _connect_kwargs(validated: Dict[str, Any]) -> Dict[str, Any]:
       kwargs["passphrase"] = validated["password"]
   elif validated.get("password"):
     kwargs["password"] = validated["password"]
+  else:
+    # No explicit credentials: behave like the ssh CLI — try the default
+    # identities (~/.ssh/id_*) and the local agent.
+    kwargs["look_for_keys"] = True
+    kwargs["allow_agent"] = True
   return kwargs
 
 
@@ -357,12 +362,8 @@ def validate_remote_config(config: Dict[str, Any]) -> Dict[str, Any]:
         stage="config",
       )
     remote_key_path = str(expanded)
-  if not password and not remote_key_path:
-    raise RemoteExecutionError(
-      "remote.password or remote.key_path is required (key or password auth)",
-      code_hint="WGSC-STEP4-CONFIG-001",
-      stage="config",
-    )
+  # No password/key_path is fine: the connection falls back to the local
+  # default SSH identities and agent, mirroring the ssh CLI.
 
   try:
     port = int(config.get("port", 22))
@@ -512,7 +513,98 @@ def _remote_count_files_sftp(sftp, remote_dir: str) -> int:
   return sum(1 for item in entries if not stat.S_ISDIR(item.st_mode))
 
 
+def remote_list_datasets(
+  *,
+  remote_config: Dict[str, Any],
+  timeout_seconds: int = 20,
+) -> Dict[str, Any]:
+  """List reusable datasets for the wizard's reuse step.
+
+  Needs only connection fields plus workspace_root — deliberately lighter
+  than the full preflight so datasets can be browsed before repo/python
+  paths are filled in. Auth falls back to local default SSH keys.
+  """
+  host = str(remote_config.get("host", "")).strip()
+  if not host:
+    raise RemoteExecutionError(
+      "Remote host is required to list datasets.",
+      code_hint="WGSC-STEP4-CONFIG-001",
+      stage="config",
+    )
+  workspace_root = str(remote_config.get("workspace_root", "")).strip()
+  if not workspace_root:
+    raise RemoteExecutionError(
+      "workspace_root is required to scan for datasets. Set it in the connection profile.",
+      code_hint="WGSC-STEP4-CONFIG-001",
+      stage="config",
+    )
+  validated = {
+    "host": host,
+    "port": int(remote_config.get("port", 22) or 22),
+    "username": str(remote_config.get("username", "")).strip() or "root",
+    "password": remote_config.get("password", ""),
+    "key_path": str(remote_config.get("key_path", "") or "").strip(),
+  }
+  paramiko = _load_paramiko()
+  client = _new_ssh_client(validated)
+  sftp = None
+  try:
+    try:
+      client.connect(
+        hostname=validated["host"],
+        port=validated["port"],
+        username=validated["username"],
+        **_connect_kwargs(validated),
+        timeout=timeout_seconds,
+      )
+      sftp = client.open_sftp()
+      datasets = _list_remote_datasets(
+        sftp,
+        workspace_root=workspace_root,
+        family=str(remote_config.get("algorithm_family", "") or "").strip(),
+      )
+      return {"datasets": datasets}
+    except paramiko.AuthenticationException as exc:
+      raise RemoteExecutionError(
+        "SSH authentication failed. Check remote username/password.",
+        code_hint="WGSC-STEP4-SSH-AUTH-001",
+        stage="connect",
+      ) from exc
+  finally:
+    _close_ssh_resources(client, sftp)
+
+
 def _list_remote_datasets(
+  sftp,
+  *,
+  workspace_root: str,
+  family: str,
+  max_items: int = 50,
+) -> list[Dict[str, Any]]:
+  """List reusable datasets. With a family, scan datasets/<family>/; without
+  one (wizard step 1 runs before an algorithm is picked), scan every family
+  directory so reuse works at the data step."""
+  if family:
+    return _list_family_datasets(sftp, workspace_root=workspace_root, family=family, max_items=max_items)
+  datasets_root = PurePosixPath(workspace_root) / "datasets"
+  try:
+    families = [
+      entry.filename
+      for entry in sftp.listdir_attr(str(datasets_root))
+      if stat.S_ISDIR(entry.st_mode)
+    ]
+  except Exception:
+    return []
+  items: list[Dict[str, Any]] = []
+  for scanned_family in sorted(families):
+    items.extend(_list_family_datasets(
+      sftp, workspace_root=workspace_root, family=scanned_family, max_items=max_items,
+    ))
+  items.sort(key=lambda item: item.get("updated_at", 0), reverse=True)
+  return items[: max(1, min(max_items, 200))]
+
+
+def _list_family_datasets(
   sftp,
   *,
   workspace_root: str,
@@ -572,6 +664,7 @@ def _list_remote_datasets(
 
     items.append({
       "id": dataset_id,
+      "family": family,
       "name": dataset_name,
       "path": workspace_dir,
       "dataset_dir": dataset_dir,
