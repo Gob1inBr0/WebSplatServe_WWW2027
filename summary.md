@@ -717,3 +717,9 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 侧栏截断修复：宽度改为 clamp(188px, 176px+3.5vw, 222px) 随视口微调；导航项文字加 nav-text 省略号保护（空间不足显示 … 而不是切半个字）；品牌名同样处理。
 - 窄屏行为：≤820px 表格横向滚动、路径键值对改单列、页头可换行；≤700px 侧栏收成 64px 图标栏（隐藏文字与计数徽标）。
 - 涉及 tokens.css / base.css / components.css / app.js（导航文字包一层 span）。
+
+## 2026-10-05 补记：字体修复"看起来没生效"的排查
+
+- 实测结论：修复本身已生效（导航项零截断、clamp 变量在位），用户截图中的截断来自浏览器里尚未刷新的旧版 JS/CSS（旧导航标记没有省略号保护节点）。
+- 加固：index.html 的四个静态资源引用加 ?v= 时间戳查询参数，此后任何样式/脚本更新一次刷新必定生效；components.css 再补两层保护（nav-item overflow hidden、页脚状态文字显式 min-width:0）。
+- 用户侧操作：在出现截断的窗口做一次强制刷新（Cmd+Shift+R / Ctrl+F5）即可。
