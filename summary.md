@@ -704,3 +704,9 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 过程中修复两个平台 bug（向导死锁 5ca4cda、上传 413 b145480）；发现两个待修问题：复用数据集扫描依赖算法族（向导第一步选不了算法导致永远为空）、预检失败提示不常驻。
 - OOM 教训：任务默认跑 GPU 0（被占卡），用档案"激活命令"export CUDA_VISIBLE_DEVICES=1 指定空闲卡；快速验证参数用 voxel_size 0.01（0.001 在该场景生成海量锚点）。
 - 完整报告与 18 张逐步截图：docs/HAC++全流程验证报告.md、docs/e2e-run-screenshots/。
+
+## 2026-10-05 补记：控制台 UI 正式轮成功（运行列表出现成功行）
+
+- 排查用户截图的两条"失败"运行：04:50 = HAC++ torch 版本硬守卫；05:02 = OOM（GPU 0 被占卡 + 体素 0.001 锚点爆炸）。根因均已处理。
+- 激活命令字段有安全校验（只允许纯 conda/venv 命令，拒绝 export），GPU 指定改用包装解释器方案：/home/T0ng/bin/python-gpu1（内部 CUDA_VISIBLE_DEVICES=1），档案 Python 字段指向它，预检合规通过。
+- 控制台第三轮完整提交成功：drjohnson-hac-plus-plus-10-05-05:23，已完成，PSNR 14.65 / SSIM 0.695 / LPIPS 0.522，29.7 it/s，19 MB 点云，结果已自动回传本地（web/generated/runs/session-muusyz66/）。截图 20-23 已归档，报告已更新。
