@@ -40,13 +40,14 @@
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 
-  /* 字号阶梯 */
-  --fs-xs: 12px;
-  --fs-sm: 13px;
-  --fs-md: 14px;
-  --fs-lg: 16px;
-  --fs-xl: 20px;
-  --fs-2xl: 26px;
+  /* 字号阶梯（流式：窄屏收缩、宽屏缓增，clamp 保证始终可读）
+     以 1200px 视口为基准值，向下按视口收缩到下限、向上缓增到上限 */
+  --fs-xs: clamp(10.5px, calc(11.5px - (1100px - 100vw) * 0.004), 12.5px);
+  --fs-sm: clamp(11.5px, calc(13px   - (1200px - 100vw) * 0.004), 14px);
+  --fs-md: clamp(12.5px, calc(14px   - (1200px - 100vw) * 0.004), 15.5px);
+  --fs-lg: clamp(13.5px, calc(16px   - (1200px - 100vw) * 0.006), 18px);
+  --fs-xl: clamp(16px,   calc(20px   - (1200px - 100vw) * 0.009), 24px);
+  --fs-2xl: clamp(19px,  calc(26px   - (1200px - 100vw) * 0.012), 32px);
 
   /* 间距（4 的倍数） */
   --sp-1: 4px;
@@ -68,8 +69,8 @@
   --shadow-2: 0 6px 24px rgba(0, 0, 0, 0.42);
   --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.55);
 
-  /* 布局 */
-  --sidebar-w: 216px;
+  /* 布局（侧栏宽度随视口微调，避免文字被截断） */
+  --sidebar-w: clamp(188px, calc(176px + 3.5vw), 222px);
   --topbar-h: 54px;
 
   --transition: 140ms cubic-bezier(0.4, 0, 0.2, 1);

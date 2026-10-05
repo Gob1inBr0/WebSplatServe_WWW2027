@@ -710,3 +710,10 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 排查用户截图的两条"失败"运行：04:50 = HAC++ torch 版本硬守卫；05:02 = OOM（GPU 0 被占卡 + 体素 0.001 锚点爆炸）。根因均已处理。
 - 激活命令字段有安全校验（只允许纯 conda/venv 命令，拒绝 export），GPU 指定改用包装解释器方案：/home/T0ng/bin/python-gpu1（内部 CUDA_VISIBLE_DEVICES=1），档案 Python 字段指向它，预检合规通过。
 - 控制台第三轮完整提交成功：drjohnson-hac-plus-plus-10-05-05:23，已完成，PSNR 14.65 / SSIM 0.695 / LPIPS 0.522，29.7 it/s，19 MB 点云，结果已自动回传本地（web/generated/runs/session-muusyz66/）。截图 20-23 已归档，报告已更新。
+
+## 2026-10-05 补记：控制台字体与布局自适应
+
+- 字号阶梯从固定 px 改为 clamp() 流式值（以 1200px 视口为基准）：窄屏字号平滑收缩到可读下限、宽屏缓增到上限，浏览器缩放/窄窗口下不再出现文字溢出。
+- 侧栏截断修复：宽度改为 clamp(188px, 176px+3.5vw, 222px) 随视口微调；导航项文字加 nav-text 省略号保护（空间不足显示 … 而不是切半个字）；品牌名同样处理。
+- 窄屏行为：≤820px 表格横向滚动、路径键值对改单列、页头可换行；≤700px 侧栏收成 64px 图标栏（隐藏文字与计数徽标）。
+- 涉及 tokens.css / base.css / components.css / app.js（导航文字包一层 span）。

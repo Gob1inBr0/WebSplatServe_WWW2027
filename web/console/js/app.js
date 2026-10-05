@@ -83,7 +83,7 @@ const App = {
                   :class="{ active: store.route.page === item.page }"
                   @click="navigate(item.page)">
             <icon :name="item.icon"></icon>
-            <span>{{ t(item.label) }}</span>
+            <span class="nav-text">{{ t(item.label) }}</span>
             <span v-if="item.page === 'runs' && runningCount" class="nav-pill">{{ runningCount }}</span>
           </button>
         </nav>
