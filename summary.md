@@ -739,3 +739,10 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 2. **扫描按算法族作用域**：数据集列表扫 datasets/<族>/，而向导第一步尚未选算法、族为空，永远扫不到。修复：族为空时遍历所有族目录合并扫描，结果条目携带 family 字段；前端选中数据集时自动预选该数据集所属算法族。
 3. 新增轻量接口 POST /api/remote-datasets（只需连接字段+workspace_root，不需要 repo/python 路径），向导复用列表改调它——数据集浏览不再依赖完整预检。
 - 实测：以用户档案形态（无密钥/无密码/无族）调用，默认密钥认证成功，正确返回 hac-plus-plus/drjohnson-preview-（undistorted_ready，100 帧）。本机与 LYH 各 11 个测试模块通过。
+
+## 2026-10-05 补记：test2 30k 训练失败根因与重跑成功
+
+- 用户 UI 提交的 test2（标准 30k 档）训练中途失败：HAC++ 评测步骤调用 GPCC 点云编码器（裸命令 tmc3），包装解释器环境没有该 PATH，命令不存在（退出码 32512）。
+- 修复：/home/T0ng/bin/python-gpu1 包装脚本补 PATH（SHARC env bin），tmc3 v23.0 可解析。
+- 原命令重跑成功：30000 迭代全部完成，PSNR 21.84 / SSIM 0.787 / LPIPS 0.333，bitstreams 码流与点云产物齐全（/websplatserve/outputs/runs/test2-hac-plus-plus-20261005T070538Z）。GPCC 压缩步（7000/12000 步测试点）均通过。
+- 注：重跑在服务器侧执行，控制台该运行仍显示失败状态；再次从 UI 提交同参数将直接成功。
