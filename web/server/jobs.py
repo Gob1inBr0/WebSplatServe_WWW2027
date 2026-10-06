@@ -1270,6 +1270,10 @@ def apply_remote_poll_result(job: Dict[str, Any], poll_result: Dict[str, Any]) -
   ):
     if key in poll_result:
       job[key] = poll_result[key]
+  if str(job.get("status")) == "failed":
+    reason = str(poll_result.get("message") or "").strip()
+    if reason:
+      job["failure_reason"] = reason[:400]
   if poll_result.get("remote_pid"):
     job["remote_pid"] = poll_result.get("remote_pid")
   if poll_result.get("remote_tmux_session"):
@@ -1323,6 +1327,40 @@ def start_remote_monitor_thread(job: Dict[str, Any], remote_config: Dict[str, An
           apply_remote_poll_result(job, poll_result)
           persist_job_state(job)
           if is_job_terminal(job):
+            if (
+              str(job.get("status")) == "failed"
+              and not job.get("cancel_requested")
+              and int(job.get("auto_retry_count", 0) or 0) < 1
+              and job.get("remote_run_script")
+              and job.get("remote_tmux_session")
+            ):
+              job["auto_retry_count"] = int(job.get("auto_retry_count", 0) or 0) + 1
+              job["status"] = "running"
+              job["remote_stage"] = "auto_retry"
+              job["monitor_state"] = "monitoring"
+              append_job_log_line(
+                job,
+                "stdout",
+                f"[Auto-retry {job['auto_retry_count']}/1] Previous attempt failed"
+                f" ({str(job.get('failure_reason') or job.get('failure_stage') or 'unknown')[:200]});"
+                " relaunching the same remote script.\n",
+              )
+              persist_job_state(job)
+              try:
+                from web.server.remote_executor import relaunch_remote_tmux_job
+                relaunch_remote_tmux_job(
+                  remote_config=remote_config,
+                  tmux_session=str(job.get("remote_tmux_session", "")),
+                  run_script=str(job.get("remote_run_script", "")),
+                  job_dir=str(PurePosixPath(str(job.get("remote_run_script", ""))).parent),
+                  runtime_log=str(job.get("remote_log_path", "")),
+                  status_path=str(job.get("remote_status_path", "")),
+                )
+                continue  # keep the same monitor polling the relaunched run
+              except Exception as retry_exc:
+                append_job_log_line(job, "stderr", f"[Auto-retry] relaunch failed: {retry_exc}\n")
+                job["status"] = "failed"
+                persist_job_state(job)
             set_remote_download_progress(job, {
               "files": 0,
               "bytes": 0,

@@ -772,3 +772,27 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - drjohnson 17 个算法 + playroom 18 个算法 = 35 个 tmux 任务全部通过向导点击提交（新建训练→复用数据集→选算法→标准 30k→预检→启动→确认），每条提交前 touch RELEASE-2..7 释放占卡器，动态选卡 wrapper 把任务分散到空闲卡。
 - 已知排期事项：lightgaussian 是剪枝型算法需要 checkpoint，待 vanilla-3dgs 30k 完成后补提交；35 个任务在 7-8 张卡上时间片轮转，预计数小时内陆续完成；个别任务在致密化阶段可能 OOM，失败的可等卡空闲后从页面重提。
 - 每条提交记录：drjohnson 顺序 vanilla/taming/mini/eagles/reduced/gslightning/megs2/gaussianspa/scaffold/rdo/octree/gaussianpro/atomgs/compgs/hac/contextgs/sog；playroom 同序 + hac++。
+
+## 2026-10-06 失败归因分析 + 平台两项改进 + 三轮重提
+
+### 35 条批量训练的失败归因（逐条读服务器 runtime.log）
+
+| 类别 | 条数 | 根因 | 修复 |
+|---|---|---|---|
+| torch 版本硬守卫 | 14 | Web_Scan 时期给各算法仓库加的"必须 2.2/cu121"检查；冒烟 -h 不触发所以环境装配时漏网；且同一文件里有两种措辞的 raise，第一轮正则只匹配了一种 | 全部降级为警告（两轮正则补丁） |
+| 可视化端口冲突 | 9 | scaffold/sog/octree/gaussianspa/mini 等训练启动时在固定端口 bind 网络可视化服务，8+ 任务并发撞车 | 17 个 network_gui.py 全部改为 bind 失败自动 +1 |
+| 训练路径懒加载依赖 | 5 | EAGLES 压缩步才 import torchac、AtomGS 真训才要 matplotlib、CompGS 要 pytorch_msssim、GSLightning 要 viser/splines | 各 venv 定向补装 |
+| compressai API 漂移 | 2 | RDO 引用 data_compression._CXX 私有符号 | 改从 compressai._CXX 导入 |
+| 提交时点 GPU 全满 OOM | 若干 | 8 卡饱和后仍继续提交 | 自动重试机制 + 空闲时重提 |
+
+### 平台两项改进（针对"没有失败原因、没有自动重试"）
+
+1. **失败原因上页面**：监控线程把远程 status.json 的 message 落到 job.failure_reason，运行抽屉失败状态下显示红字原因（中英双语词条），列表接口自动携带。
+2. **自动重试一次**：远程任务失败时监控线程自动用同一 run.sh 在新 tmux 会话重启一次（数据已在服务器，无需重传），日志写 [Auto-retry 1/1]，页面任务卡显示"曾失败一次——已自动重试"。仅重试一次，二次失败如实显示原因。
+3. 附带：无凭据档案回退默认 SSH 密钥（本批已上线）。
+
+### 三轮重提节奏
+
+- 第一轮重提 29 条（守卫第一版补丁后）→ 暴露守卫第二种措辞 + 端口冲突未修，11 条再失败（页面现在能看到原因了）。
+- 补丁补全后第三轮重提 → 多数进入 running；部分因 8 卡饱和 OOM（atomgs playroom 等）。
+- 当前：20 条 running（8 卡 90-100% 满载）、4 条 completed、其余为历史失败记录。饱和期间暂停重提，等任务完成腾卡后再提 OOM 的那几条。

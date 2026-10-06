@@ -254,6 +254,14 @@ export default {
             <ui-badge kind="neutral" v-if="drawerJob.algorithm_family">{{ drawerJob.algorithm_family }}</ui-badge>
             <button class="btn btn-ghost btn-sm" @click.stop="renameRun" :title="$t('runs.rename')"><icon name="file"></icon> {{ $t("runs.rename") }}</button>
           </div>
+          <div v-if="drawerJob.status === 'failed' && (drawerJob.failure_reason || drawerJob.failure_stage)"
+               class="small" style="color:var(--danger,#e05c5c);margin:-2px 0 10px;overflow-wrap:anywhere">
+            ⚠ {{ drawerJob.failure_reason || drawerJob.failure_stage }}
+          </div>
+          <div v-if="drawerJob.remote_stage === 'auto_retry' || drawerJob.auto_retry_count"
+               class="small muted" style="margin:-2px 0 10px">
+            ↻ {{ $t("runs.autoRetried") }}
+          </div>
 
           <div class="grid-3">
             <ui-stat label="PSNR" :value="drawerJob.metrics?.psnr ? Number(drawerJob.metrics.psnr).toFixed(2) : '-'" />

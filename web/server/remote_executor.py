@@ -3206,6 +3206,65 @@ def start_remote_algorithm_detached(
     _close_ssh_resources(client, sftp)
 
 
+def relaunch_remote_tmux_job(
+  *,
+  remote_config: Dict[str, Any],
+  tmux_session: str,
+  run_script: str,
+  job_dir: str,
+  runtime_log: str,
+  status_path: str = "",
+) -> Dict[str, Any]:
+  """Re-run the same remote run.sh inside a fresh tmux session (auto-retry).
+
+  The dataset is already on the remote and the script is idempotent for a
+  fresh training pass, so a retry needs no re-upload.
+  """
+  if not tmux_session or not run_script:
+    raise RemoteExecutionError(
+      "Missing remote tmux session or run script path for auto-retry.",
+      code_hint="WGSC-JOB-RETRY-001",
+      stage="auto_retry",
+    )
+  validated = validate_remote_config(remote_config)
+  paramiko = _load_paramiko()
+  client = _new_ssh_client(validated)
+  try:
+    client.connect(
+      hostname=validated["host"],
+      port=validated["port"],
+      username=validated["username"],
+      **_connect_kwargs(validated),
+      timeout=20,
+    )
+    launcher = (
+      f"tmux set-window-option remain-on-exit on >/dev/null 2>&1 || true\n"
+      f"echo \"[Tmux] Auto-retry session {tmux_session} started at $(date -u +%Y-%m-%dT%H:%M:%SZ)\" | tee -a {_quote(runtime_log)}\n"
+      f"set -o pipefail\n"
+      f"bash {_quote(run_script)} 2>&1 | tee -a {_quote(runtime_log)}\n"
+      f"run_rc=${{PIPESTATUS[0]}}\n"
+      f"echo \"[Tmux] run.sh exited with code $run_rc at $(date -u +%Y-%m-%dT%H:%M:%SZ)\" | tee -a {_quote(runtime_log)}\n"
+      f"exit \"$run_rc\"\n"
+    )
+    shell_command = f"bash -lc {_quote(launcher)}"
+    command = (
+      f"rm -f {_quote(_remote_exit_code_path_from_status_path(status_path or (Path(job_dir) / 'status.json').as_posix()))} 2>/dev/null; "
+      f"if tmux has-session -t {_quote(tmux_session)} 2>/dev/null; then tmux kill-session -t {_quote(tmux_session)}; fi; "
+      f"tmux new-session -d -s {_quote(tmux_session)} -c {_quote(job_dir)} {_quote(shell_command)}"
+    )
+    _, stdout, stderr = client.exec_command(command, timeout=30)
+    rc = stdout.channel.recv_exit_status()
+    if rc != 0:
+      raise RemoteExecutionError(
+        f"Auto-retry tmux relaunch failed: {stderr.read().decode('utf-8', 'replace')[:200]}",
+        code_hint="WGSC-JOB-RETRY-002",
+        stage="auto_retry",
+      )
+    return {"ok": True, "tmux_session": tmux_session}
+  finally:
+    client.close()
+
+
 def poll_remote_detached_job(
   *,
   remote_config: Dict[str, Any],
