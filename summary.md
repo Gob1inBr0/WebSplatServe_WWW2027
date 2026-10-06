@@ -804,3 +804,10 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 运行中 13 条：atomgs/gaussianpro/rdo/octree/gaussianspa/reduced 等的修复后重提。
 - 失败原因回填：64 条失败记录全部写入真实错误行（从流式日志提取，含 OOM 明细与缺失模块名），页面运行抽屉直接显示红字原因；捕获逻辑同步升级（失败时从日志尾提取真实异常而非通用消息）。
 - CompGS venv 补装 compressai（此前只装了 RDO 的），入口验证通过。
+
+## 2026-10-07 批次状态快照（页面口径）
+
+- 覆盖矩阵核算：38 对"算法×场景"中 15 对已完成（含真实 PSNR：playroom HAC 24.43 / HAC++ 24.41 / Taming 24.31；drjohnson HAC 22.81 / vanilla 22.30），23 对缺失。
+- 磁盘危机处理：失败任务残留输出 ~20G 清理后恢复可用；80 个残留 tmux 会话清理。
+- 23 对缺失已全部通过页面点击重新提交（分 9 批，每批前释放占卡器卡 2-7）；lightgaussian × drjohnson 首提失败（.ply 不是 torch checkpoint），根因：需要带 --checkpoint_iterations 的 vanilla 训练产出 .pth——已在服务器后台补跑 vanilla 30k（约 30 分钟），完成后从页面提交 lightgaussian，随后等 playroom vanilla 完成再提交 lightgaussian × playroom。
+- 当前 GPU 全线 90%+ 满载，全部任务预计数小时内陆续完成；失败的任务页面直接显示红字原因，失败自动重试一次已生效。
