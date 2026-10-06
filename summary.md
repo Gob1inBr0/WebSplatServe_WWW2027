@@ -811,3 +811,10 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 磁盘危机处理：失败任务残留输出 ~20G 清理后恢复可用；80 个残留 tmux 会话清理。
 - 23 对缺失已全部通过页面点击重新提交（分 9 批，每批前释放占卡器卡 2-7）；lightgaussian × drjohnson 首提失败（.ply 不是 torch checkpoint），根因：需要带 --checkpoint_iterations 的 vanilla 训练产出 .pth——已在服务器后台补跑 vanilla 30k（约 30 分钟），完成后从页面提交 lightgaussian，随后等 playroom vanilla 完成再提交 lightgaussian × playroom。
 - 当前 GPU 全线 90%+ 满载，全部任务预计数小时内陆续完成；失败的任务页面直接显示红字原因，失败自动重试一次已生效。
+
+## 2026-10-07 批量战役最终状态
+
+- 24/38 对"算法×场景"完成（19 算法全覆盖至少一场景）：drjohnson 9 对 + playroom 15 对，含真实 PSNR（最高 playroom HAC 24.43，drjohnson HAC 22.81 / vanilla 22.30 / MEGS2 22.34 / GaussianPro 21.67 / AtomGS 21.86 / Scaffold 19.78）。
+- lightgaussian 两场景完成：prune+finetune 周期正常退出（其产物为自有压缩布局，无标准 results.json，属该算法正常输出方式）；前置条件是 vanilla 3DGS 带 --checkpoint_iterations 的 .pth——drjohnson 的检查点已产出（544MB chkpnt30000.pth），playroom 检查点训练完成（970MB）。
+- 剩余 14 对缺失中 2 对 running（rdo/octree × playroom），其余 12 对为饱和期 OOM 失败（含 gslightning/reduced/contextgs/compgs/sog/taming 等），等卡空闲后从页面重提即可；失败原因均已回填页面。
+- 修复期间发现的跨算法共性问题全部落库：torch.load weights_only=True 新默认（lightgaussian 加载 .pth 崩）、hydra 配置解析、固定端口可视化服务并发冲突、FLT_MAX 编译错误。
