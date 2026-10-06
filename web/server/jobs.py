@@ -19,6 +19,7 @@ import os
 import shlex
 import subprocess
 import sys
+import re
 import threading
 import time
 from pathlib import Path, PurePosixPath
@@ -1272,6 +1273,15 @@ def apply_remote_poll_result(job: Dict[str, Any], poll_result: Dict[str, Any]) -
       job[key] = poll_result[key]
   if str(job.get("status")) == "failed":
     reason = str(poll_result.get("message") or "").strip()
+    if reason in ("", "Remote training failed."):
+      # The status marker only carries a generic message; dig the actual
+      # exception out of the streamed log tail.
+      m = re.findall(
+        r"((?:RuntimeError|ModuleNotFoundError|OutOfMemoryError|AssertionError|FileNotFoundError|OSError|NameError|ValueError|KeyError)[^\n]{0,180})",
+        log_text,
+      )
+      if m:
+        reason = m[-1].strip()
     if reason:
       job["failure_reason"] = reason[:400]
   if poll_result.get("remote_pid"):

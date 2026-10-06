@@ -796,3 +796,11 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 第一轮重提 29 条（守卫第一版补丁后）→ 暴露守卫第二种措辞 + 端口冲突未修，11 条再失败（页面现在能看到原因了）。
 - 补丁补全后第三轮重提 → 多数进入 running；部分因 8 卡饱和 OOM（atomgs playroom 等）。
 - 当前：20 条 running（8 卡 90-100% 满载）、4 条 completed、其余为历史失败记录。饱和期间暂停重提，等任务完成腾卡后再提 OOM 的那几条。
+
+## 2026-10-07 批量训练状态快照 + 失败原因回填
+
+- 86 条任务：9 完成 / 13 运行中 / 64 失败（失败集中在环境修复前的三轮）。
+- 已完成含真实 PSNR：playroom HAC 24.43 / HAC++ 24.41 / Taming 24.31；drjohnson HAC 22.81 / vanilla 22.30；5k 验证档 HAC++ 15.43。Mini-Splatting 两场景完成（指标键名待解析显示为 -）。
+- 运行中 13 条：atomgs/gaussianpro/rdo/octree/gaussianspa/reduced 等的修复后重提。
+- 失败原因回填：64 条失败记录全部写入真实错误行（从流式日志提取，含 OOM 明细与缺失模块名），页面运行抽屉直接显示红字原因；捕获逻辑同步升级（失败时从日志尾提取真实异常而非通用消息）。
+- CompGS venv 补装 compressai（此前只装了 RDO 的），入口验证通过。
