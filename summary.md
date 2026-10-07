@@ -824,3 +824,15 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - 磁盘再次 100%（0 可用）：新完成任务的评测渲染与中间点云持续累积。安全清理：已完成任务的 test 渲染目录（PSNR 已存 results.json，渲染可重新生成）、iteration_7000 中间点云、tensorboard 事件文件——保留最终模型与指标。恢复 8.1G 可用。
 - 修复后重提轮（contextgs/compgs/reduced/sog/taming × drjohnson 等）已在服务器运行。
 - 磁盘教训：30k 评测渲染是磁盘大头，批量跑完一个阶段应清理 test 渲染，或平台增加"保留 renders 张数"配置。
+
+## 2026-10-07 第四轮修复：三算法的深层 bug
+
+前三轮重提又暴露三个新问题，全部修复并重提验证：
+
+1. **ContextGS 设备 bug 的完整修复**：此前只补了 conduct_encoding 一处的 torch.arange（变量名 anchor），但同文件还有 4 处（_anchor/anchor_decoded 变量名）未修——sed 按变量名匹配漏掉。这次按"arange 必须跟随被索引张量的设备"全部修正；验证轮已跑过 conduct_encoding 原失败点，本轮死于 GPU 占满 OOM（等空闲卡）。
+2. **SOG 的 resolution 是字符串**：hydra 配置传入 "-1"（3DGS 惯例表示按 1600px 缩放），字符串除法直接崩。首修 int() 转换后又暴露分支问题（字符串 "-1" 不匹配 [1,2,4,8] 列表走进错误分支算出负尺寸）；终修为 loadCam 开头统一 int 转换，让标准分支逻辑自己处理 -1。
+3. **reduced-3dgs 训练阶段缺 pandas**：装包后重提，已完成（pandas + np.cast 两个修复都生效）。
+4. **GSLightning**：残留输出目录断言——已清理旧目录。
+5. **RDO 的 compressai 兼容性最终结论**：1.2.8 移除了 rans 模块（垫片方案 ans coder 在 RDO 规模输入下段错误），1.2.6/1.2.4 源码编译失败且 1.2.4 的 ans 同样段错误。compressai pip 版在此环境（torch 2.7/cu128/A100）无法支撑 RDO 的编码步，需要官方 repo 源码安装 compressai（带匹配的编译扩展）才能跑通——列为已知限制，等后续处理。
+6. **lightgaussian × drjohnson 已完成**（.pth 检查点方案验证跑通：vanilla 训练加 --checkpoint_iterations 产出 chkpnt30000.pth，页面填路径提交即可）；playroom 检查点训练完成（970MB），lightgaussian × playroom 已提交并完成。
+7. 页面验证：自动重试机制实测生效——07:41 轮失败的 sog/contextgs 被平台自动拉起重跑（修复后的环境），截图 33。
