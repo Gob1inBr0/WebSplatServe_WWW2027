@@ -836,3 +836,22 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 5. **RDO 的 compressai 兼容性最终结论**：1.2.8 移除了 rans 模块（垫片方案 ans coder 在 RDO 规模输入下段错误），1.2.6/1.2.4 源码编译失败且 1.2.4 的 ans 同样段错误。compressai pip 版在此环境（torch 2.7/cu128/A100）无法支撑 RDO 的编码步，需要官方 repo 源码安装 compressai（带匹配的编译扩展）才能跑通——列为已知限制，等后续处理。
 6. **lightgaussian × drjohnson 已完成**（.pth 检查点方案验证跑通：vanilla 训练加 --checkpoint_iterations 产出 chkpnt30000.pth，页面填路径提交即可）；playroom 检查点训练完成（970MB），lightgaussian × playroom 已提交并完成。
 7. 页面验证：自动重试机制实测生效——07:41 轮失败的 sog/contextgs 被平台自动拉起重跑（修复后的环境），截图 33。
+
+## 2026-10-07 GPU 分配问题与占卡器处理
+
+### 用户的两个问题与处理
+
+1. **"工具有没有自动分配？"**：平台本身没有多卡调度器——训练命令直接落在 CUDA 默认设备。已通过每算法的包装脚本（py-<repo>）做"启动时选最空闲卡"的尽力分配，但同批任务几乎同时启动时会相互竞争同一张卡（nvidia-smi 快照滞后于实际占用）。占卡器又不断回收刚释放的卡，加剧了这个问题。
+2. **"把占卡器 kill 了"（用户授权）**：已执行——kill 了 keeper_watch.sh 看护进程和两个 gpu_keeper_worker（原占 GPU 5/7 各 38GB）。GPU 0/3/5/7 现在完全空闲供批量任务使用。注意：占卡器是组内资源策略，后续如需恢复直接重启 keeper_watch.sh 即可。
+
+### 第四轮新失败与修复（2 对）
+
+- **sog × drjohnson**：修 resolution 后暴露下一层——SOG 走 hydra 时传给 loadCam 的 GroupParams 没有 data_device 字段。修为 getattr 默认 "cpu"。
+- **gslightning × playroom**：自动重试重启时旧的失败输出目录导致断言失败。已清理残留目录。
+- 两对均已重提且在运行。
+
+### 战绩更新
+
+- taming × drjohnson **完成**：PSNR 21.66（预算保护修复验证通过）。
+- 当前 26/38 对完成，2 对新提交在跑，其余等卡轮转。
+- 已知限制：RDO 编码步需源码版 compressai（pip 三个版本在此环境均不可用）。
