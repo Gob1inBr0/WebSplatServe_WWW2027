@@ -818,3 +818,9 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 - lightgaussian 两场景完成：prune+finetune 周期正常退出（其产物为自有压缩布局，无标准 results.json，属该算法正常输出方式）；前置条件是 vanilla 3DGS 带 --checkpoint_iterations 的 .pth——drjohnson 的检查点已产出（544MB chkpnt30000.pth），playroom 检查点训练完成（970MB）。
 - 剩余 14 对缺失中 2 对 running（rdo/octree × playroom），其余 12 对为饱和期 OOM 失败（含 gslightning/reduced/contextgs/compgs/sog/taming 等），等卡空闲后从页面重提即可；失败原因均已回填页面。
 - 修复期间发现的跨算法共性问题全部落库：torch.load weights_only=True 新默认（lightgaussian 加载 .pth 崩）、hydra 配置解析、固定端口可视化服务并发冲突、FLT_MAX 编译错误。
+
+## 2026-10-07 磁盘二次危机处理 + 重提轮运行中
+
+- 磁盘再次 100%（0 可用）：新完成任务的评测渲染与中间点云持续累积。安全清理：已完成任务的 test 渲染目录（PSNR 已存 results.json，渲染可重新生成）、iteration_7000 中间点云、tensorboard 事件文件——保留最终模型与指标。恢复 8.1G 可用。
+- 修复后重提轮（contextgs/compgs/reduced/sog/taming × drjohnson 等）已在服务器运行。
+- 磁盘教训：30k 评测渲染是磁盘大头，批量跑完一个阶段应清理 test 渲染，或平台增加"保留 renders 张数"配置。
