@@ -63,9 +63,15 @@ CLIENT_EVENT_FIELDS = {
     "p95_frame_ms": (int, 0, 3600 * 1000),
     "fps": (float, 0.0, 10000.0),
     "failed": (bool,),
-    "fail_stage": (str, 40),
+    # fail_stage is a small closed set so paper tables get stable buckets;
+    # fail_detail carries the raw message (truncated) for debugging.
+    "fail_stage": (str, 24),
+    "fail_detail": (str, 200),
   },
 }
+
+# Closed failure buckets reported by the viewer (progressive.js classifyFailure).
+FAIL_STAGES = ("manifest", "webgl", "worker", "chunks", "internal")
 
 
 def telemetry_enabled() -> bool:
@@ -288,6 +294,29 @@ class TelemetryStore:
       profile_counts[profile] = profile_counts.get(profile, 0) + 1
       capability_counts[capability] = capability_counts.get(capability, 0) + 1
 
+    fps_values = [
+      float(e["fps"]) for e in stage_events["complete"]
+      if isinstance(e.get("fps"), (int, float)) and not isinstance(e.get("fps"), bool)
+    ]
+    client_ids = {str(e["client_id"]) for e in serving_events if e.get("client_id")}
+    failed_loads = len(stage_events["failed"])
+
+    def _scale_bucket(rows) -> str:
+      # Scene-size buckets keep scene names out of the telemetry while still
+      # allowing "TTFR vs scene size" analysis in the paper.
+      if not isinstance(rows, int) or isinstance(rows, bool) or rows <= 0:
+        return "unknown"
+      if rows < 1_000_000:
+        return "lt_1m"
+      if rows < 5_000_000:
+        return "1m_to_5m"
+      return "gt_5m"
+
+    scale_counts: dict = {}
+    for event in serving_events:
+      bucket = _scale_bucket(event.get("scene_rows"))
+      scale_counts[bucket] = scale_counts.get(bucket, 0) + 1
+
     export_ok = sum(1 for e in export_events if e.get("ok"))
     export_errors: dict = {}
     for event in export_events:
@@ -314,12 +343,16 @@ class TelemetryStore:
         "loads": len(serving_events),
         "loads_by_stage": {name: len(items) for name, items in sorted(stage_events.items())},
         "benchmark_loads": len(benchmark_events),
+        "unique_clients": len(client_ids),
+        "failure_rate": round(failed_loads / len(serving_events), 4) if serving_events else 0.0,
         "ttfr_ms": _stats(ttfr_values),
         "bytes": _stats(byte_values),
         "p95_frame_ms": _stats(frame_values),
+        "fps": _stats(fps_values),
         "by_policy": dict(sorted(policy_counts.items())),
         "by_client_profile": dict(sorted(profile_counts.items())),
         "by_capability": dict(sorted(capability_counts.items())),
+        "by_scene_scale": dict(sorted(scale_counts.items())),
         "failures_by_stage": dict(sorted(fail_reasons.items())),
       },
       "exports": {

@@ -9,21 +9,21 @@
  "source": "sphere-sh.ply",
  "bounds": {
   "min": [
-   -1.1991,
-   -1.1992,
-   -1.1989
+   -0.9992,
+   -0.9987,
+   -0.9993
   ],
   "max": [
-   1.1998,
-   1.1992,
-   1.1992
+   0.9996,
+   0.9998,
+   0.9993
   ],
   "center": [
-   0.0004,
-   0.0,
-   0.0002
+   0.0002,
+   0.0006,
+   0.0
   ],
-  "radius": 2.0771
+  "radius": 1.7309
  },
  "chunks": [
   {
@@ -49,41 +49,41 @@
    "shBytes": 43200
   },
   {
-   "id": "q2_r2",
+   "id": "q2_r4",
    "type": "region",
    "quality": 2,
-   "url": "q2_r2.bin",
-   "rows": 93,
-   "bytes": 2976,
-   "gain": 93.0,
-   "shUrl": "q2_r2.sh.bin",
-   "shBytes": 17856,
-   "region": {
-    "center": [
-     -0.7241,
-     0.3003,
-     -0.7399
-    ],
-    "radius": 0.8833
-   }
-  },
-  {
-   "id": "q2_r3",
-   "type": "region",
-   "quality": 2,
-   "url": "q2_r3.bin",
+   "url": "q2_r4.bin",
    "rows": 94,
    "bytes": 3008,
    "gain": 94.0,
-   "shUrl": "q2_r3.sh.bin",
+   "shUrl": "q2_r4.sh.bin",
    "shBytes": 18048,
    "region": {
     "center": [
-     0.7303,
-     0.3036,
-     -0.7312
+     -0.611,
+     -0.6058,
+     0.2488
     ],
-    "radius": 0.8411
+    "radius": 0.7286
+   }
+  },
+  {
+   "id": "q2_r5",
+   "type": "region",
+   "quality": 2,
+   "url": "q2_r5.bin",
+   "rows": 94,
+   "bytes": 3008,
+   "gain": 94.0,
+   "shUrl": "q2_r5.sh.bin",
+   "shBytes": 18048,
+   "region": {
+    "center": [
+     0.61,
+     -0.6076,
+     0.2524
+    ],
+    "radius": 0.7415
    }
   },
   {
@@ -91,18 +91,18 @@
    "type": "region",
    "quality": 2,
    "url": "q2_r6.bin",
-   "rows": 94,
-   "bytes": 3008,
-   "gain": 94.0,
+   "rows": 93,
+   "bytes": 2976,
+   "gain": 93.0,
    "shUrl": "q2_r6.sh.bin",
-   "shBytes": 18048,
+   "shBytes": 17856,
    "region": {
     "center": [
-     -0.7369,
-     0.2969,
-     0.726
+     -0.6173,
+     0.6023,
+     0.2475
     ],
-    "radius": 0.8876
+    "radius": 0.7464
    }
   },
   {
@@ -117,11 +117,11 @@
    "shBytes": 18048,
    "region": {
     "center": [
-     0.728,
-     0.2992,
-     0.7301
+     0.6008,
+     0.6173,
+     0.2512
     ],
-    "radius": 0.8704
+    "radius": 0.7197
    }
   },
   {
@@ -136,11 +136,11 @@
    "shBytes": 35904,
    "region": {
     "center": [
-     -0.6037,
-     -0.5984,
-     -0.5982
+     -0.4996,
+     -0.5022,
+     -0.5005
     ],
-    "radius": 0.9968
+    "radius": 0.8283
    }
   },
   {
@@ -155,51 +155,51 @@
    "shBytes": 36096,
    "region": {
     "center": [
-     0.5995,
-     -0.5971,
-     -0.6007
+     0.5012,
+     -0.4983,
+     -0.4993
     ],
-    "radius": 1.0237
+    "radius": 0.8318
    }
   },
   {
-   "id": "q3_r4",
+   "id": "q3_r2",
    "type": "region",
    "quality": 3,
-   "url": "q3_r4.bin",
+   "url": "q3_r2.bin",
    "rows": 188,
    "bytes": 6016,
    "gain": 188.0,
-   "shUrl": "q3_r4.sh.bin",
+   "shUrl": "q3_r2.sh.bin",
    "shBytes": 36096,
    "region": {
     "center": [
-     -0.5982,
-     -0.6061,
-     0.5957
+     -0.4986,
+     0.4987,
+     -0.502
     ],
-    "radius": 0.9986
+    "radius": 0.8382
    }
   },
   {
-   "id": "q3_r5",
+   "id": "q3_r3",
    "type": "region",
    "quality": 3,
-   "url": "q3_r5.bin",
+   "url": "q3_r3.bin",
    "rows": 187,
    "bytes": 5984,
    "gain": 187.0,
-   "shUrl": "q3_r5.sh.bin",
+   "shUrl": "q3_r3.sh.bin",
    "shBytes": 35904,
    "region": {
     "center": [
-     0.5989,
-     -0.5984,
-     0.6039
+     0.4999,
+     0.5016,
+     -0.4982
     ],
-    "radius": 0.9842
+    "radius": 0.8491
    }
   }
  ],
- "generatedAt": 1790760735.4616861
+ "generatedAt": 1791456796.382835
 }

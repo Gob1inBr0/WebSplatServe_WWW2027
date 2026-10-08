@@ -327,6 +327,7 @@ const telemetry = {
     totalRows: 0,
     sceneRows: 0,
     chunkFailures: 0,
+    fps: 0,                     // smoothed fps, refreshed by the frame loop
 };
 window.__webgsTelemetry = () => JSON.parse(JSON.stringify(telemetry));
 
@@ -375,10 +376,21 @@ function fmtBytes(b) {
 
 let clientLoadedBeaconed = false;
 let clientFinishedBeaconed = false;
+let clientFailedBeaconed = false;
 
 function p95FrameMs() {
     const sorted = [...telemetry.frameTimes].sort((a, b) => a - b);
     return sorted.length ? sorted[Math.floor(sorted.length * 0.95)] : null;
+}
+
+// Closed failure buckets so the server's summary gets stable groups for the
+// paper's failure table; the raw message rides along as fail_detail.
+function classifyFailure(err) {
+    const msg = String(err && err.message || err);
+    if (/manifest/i.test(msg)) return "manifest";
+    if (/webgl/i.test(msg)) return "webgl";
+    if (/worker/i.test(msg)) return "worker";
+    return "internal";
 }
 
 function sendLoadBeacon(extra) {
@@ -399,6 +411,7 @@ function sendLoadBeacon(extra) {
         chunks_done: telemetry.chunkEvents.length,
         chunk_failures: telemetry.chunkFailures,
         p95_frame_ms: p95FrameMs(),
+        fps: telemetry.fps > 0 ? telemetry.fps : null,
         ...extra,
     };
     try {
@@ -730,7 +743,18 @@ async function main() {
     function schedule() {
         const pending = chunkState.filter((c) => c.status === "pending");
         if (!pending.length) {
-            if (!clientFinishedBeaconed && telemetry.chunkEvents.length && queue.size === 0) {
+            if (chunkState.length && chunkState.every((c) => c.status === "failed")) {
+                // Every chunk exhausted its retries: report the load as failed
+                // instead of staying silent forever (nothing ever rendered).
+                if (!clientFinishedBeaconed && !clientFailedBeaconed) {
+                    clientFailedBeaconed = true;
+                    sendLoadBeacon({
+                        stage: "failed", failed: true, fail_stage: "chunks",
+                        fail_detail: `all ${chunkState.length} chunk(s) failed after retries`,
+                    });
+                }
+            } else if (!clientFinishedBeaconed && !clientFailedBeaconed
+                       && telemetry.chunkEvents.length && queue.size === 0) {
                 clientFinishedBeaconed = true;
                 sendLoadBeacon({ stage: "complete", failed: false, chunks_total: chunkState.length });
             }
@@ -784,8 +808,16 @@ async function main() {
             );
         } catch (err) {
             console.error("chunk fetch failed:", chunk.id, err);
-            telemetry.chunkFailures += 1;
-            chunk.status = "pending"; // retry on the next scheduling pass
+            chunk.attempts = (chunk.attempts || 0) + 1;
+            if (chunk.attempts >= 3) {
+                // Stop retrying so a dead chunk cannot loop forever; the load
+                // either finishes degraded (chunk_failures > 0) or, if every
+                // chunk dies, reports failure via the scheduler's beacon.
+                chunk.status = "failed";
+                telemetry.chunkFailures += 1;
+            } else {
+                chunk.status = "pending"; // retry on the next scheduling pass
+            }
         } finally {
             queue.delete(chunk);
         }
@@ -827,6 +859,7 @@ async function main() {
         if (telemetry.frameTimes.length > 240) telemetry.frameTimes.shift();
         smoothFrameMs = smoothFrameMs * 0.9 + frameMs * 0.1;
         fps = 1000 / (smoothFrameMs || 16.7);
+        telemetry.fps = Math.round(fps * 10) / 10;
 
         // GPU guard: pause refinement when interaction would stutter
         const targetFrameMs = telemetry.clientProfile && telemetry.clientProfile.targetFps
@@ -849,11 +882,13 @@ async function main() {
             gl.clear(gl.COLOR_BUFFER_BIT);
         }
 
-        // telemetry sampling ~4 Hz
+        // telemetry sampling ~4 Hz; cap the buffer so a tab left open for
+        // hours cannot grow without bound (oldest samples are dropped).
         framesDone += 1;
         sampleAccum += frameMs;
         if (sampleAccum > 250) {
             sampleAccum = 0;
+            if (telemetry.samples.length >= 3600) telemetry.samples.shift();
             telemetry.samples.push({
                 tMs: Math.round(now - telemetry.startedAt),
                 bytes: telemetry.totalBytes,
@@ -901,10 +936,14 @@ main().catch((err) => {
     document.getElementById("spinner").style.display = "none";
     document.getElementById("message").innerText = err.toString();
     console.error(err);
-    // Failure-case evidence for the deployment telemetry (P1): which stage
-    // broke, with the viewer's own words as the stage hint. Skip early URL
-    // errors where the load never started (startedAt is still 0).
+    // Failure-case evidence for the deployment telemetry (P1): a stable
+    // stage bucket plus the raw message (truncated) as fail_detail. Skip
+    // early URL errors where the load never started (startedAt is still 0).
     if (telemetry.startedAt > 0) {
-        sendLoadBeacon({ stage: "failed", failed: true, fail_stage: String(err && err.message || err).slice(0, 40) });
+        sendLoadBeacon({
+            stage: "failed", failed: true,
+            fail_stage: classifyFailure(err),
+            fail_detail: String(err && err.message || err).slice(0, 200),
+        });
     }
 });

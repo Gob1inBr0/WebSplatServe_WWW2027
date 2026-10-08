@@ -10,7 +10,9 @@ import DashboardPage from "./pages/dashboard.js";
 import WizardPage from "./pages/wizard.js";
 import RunsPage from "./pages/runs.js";
 import DatasetsPage from "./pages/datasets.js";
+import AlgorithmsPage from "./pages/algorithms.js";
 import ViewerPage from "./pages/viewer-page.js";
+import DeployPage from "./pages/deploy.js";
 import SettingsPage from "./pages/settings.js";
 
 const { createApp, computed, onMounted } = Vue;
@@ -20,7 +22,9 @@ const NAV = [
   { page: "wizard",    label: "nav.wizard", icon: "plus" },
   { page: "runs",      label: "nav.runs", icon: "list" },
   { page: "datasets",  label: "nav.datasets", icon: "layers" },
+  { page: "algorithms", label: "nav.algorithms", icon: "cpu" },
   { page: "viewer",    label: "nav.viewer", icon: "box" },
+  { page: "deploy",    label: "nav.deploy", icon: "eye" },
   { page: "settings",  label: "nav.settings", icon: "settings" },
 ];
 
@@ -29,7 +33,9 @@ const PAGE_TITLES = {
   wizard: "nav.wizard",
   runs: "nav.runs",
   datasets: "nav.datasets",
+  algorithms: "nav.algorithms",
   viewer: "nav.viewer",
+  deploy: "nav.deploy",
   settings: "nav.settings",
 };
 
@@ -146,7 +152,9 @@ app.component("page-dashboard", DashboardPage);
 app.component("page-wizard", WizardPage);
 app.component("page-runs", RunsPage);
 app.component("page-datasets", DatasetsPage);
+app.component("page-algorithms", AlgorithmsPage);
 app.component("page-viewer", ViewerPage);
+app.component("page-deploy", DeployPage);
 app.component("page-settings", SettingsPage);
 window.__app = app;  // debug handle
 app.mount("#app");

@@ -45,10 +45,12 @@ def test_record_and_summary_roundtrip() -> None:
 def test_serving_load_aggregation_and_device_classes() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = TelemetryStore(directory=Path(tmp), enabled=True)
-        for ttfr in (500, 700, 900):
-            store.record("serving_load", policy="joint", ttfr_ms=ttfr, bytes=1_000_000,
-                         p95_frame_ms=20, chunks_done=9, chunk_failures=0)
-        store.record("serving_load", policy="naive", ttfr_ms=1500, failed=True, fail_stage="manifest 404")
+        for i, ttfr in enumerate((500, 700, 900)):
+            store.record("serving_load", client_id=f"client-{i % 2}", policy="joint", ttfr_ms=ttfr,
+                         bytes=1_000_000, p95_frame_ms=20, fps=58.5, chunks_done=9, chunk_failures=0,
+                         scene_rows=250_000)
+        store.record("serving_load", client_id="client-0", policy="naive", ttfr_ms=1500,
+                     failed=True, fail_stage="manifest", fail_detail="404 unable to load manifest")
 
         summary = store.summary()
         serving = summary["serving"]
@@ -60,7 +62,16 @@ def test_serving_load_aggregation_and_device_classes() -> None:
         assert serving["ttfr_ms"]["max"] == 900
         assert serving["bytes"]["count"] == 3
         assert serving["by_policy"] == {"joint": 3, "naive": 1}
-        assert serving["failures_by_stage"] == {"manifest 404": 1}
+        assert serving["failures_by_stage"] == {"manifest": 1}
+        # fps stats come from complete-stage events only
+        assert serving["fps"]["count"] == 3
+        assert serving["fps"]["min"] == 58.5
+        # failure rate over all serving loads, unique client ids across events
+        assert serving["failure_rate"] == 0.25
+        assert serving["unique_clients"] == 2
+        # scene-size buckets: the three complete loads carry 250k rows; the
+        # failed event has no scene_rows and lands in "unknown"
+        assert serving["by_scene_scale"] == {"lt_1m": 3, "unknown": 1}
 
         # device classes must be coarse names only, derived from UA strings
         assert classify_user_agent(
@@ -80,11 +91,11 @@ def test_staged_and_benchmark_events_are_aggregated_separately() -> None:
         store = TelemetryStore(directory=Path(tmp), enabled=True)
         # One real user load: first-frame beacon (TTFR) + completion beacon (bytes).
         store.record("serving_load", stage="first_frame", policy="joint", ttfr_ms=596, bytes=12_345)
-        store.record("serving_load", stage="complete", policy="joint", ttfr_ms=596, bytes=999_999)
+        store.record("serving_load", stage="complete", policy="joint", ttfr_ms=596, bytes=999_999, fps=60.0)
         # Synthetic benchmark load: must not pollute user-facing aggregates.
         store.record("serving_load", stage="first_frame", policy="joint", ttfr_ms=50, bytes=1,
                      benchmark=True)
-        store.record("serving_load", stage="complete", policy="joint", bytes=42, benchmark=True)
+        store.record("serving_load", stage="complete", policy="joint", bytes=42, fps=55.0, benchmark=True)
 
         serving = store.summary()["serving"]
         assert serving["loads"] == 4
@@ -94,6 +105,7 @@ def test_staged_and_benchmark_events_are_aggregated_separately() -> None:
         # only, and by_policy counts user loads only.
         assert serving["ttfr_ms"] == {"count": 2, "min": 50, "p50": 50, "p95": 596, "max": 596}
         assert serving["bytes"] == {"count": 2, "min": 42, "p50": 42, "p95": 999_999, "max": 999_999}
+        assert serving["fps"]["count"] == 2
         assert serving["by_policy"] == {"joint": 2}
 
 
@@ -107,6 +119,7 @@ def test_client_event_sanitization_bounds_fields() -> None:
         "bytes": 123456,
         "failed": False,
         "fail_stage": "x" * 500,           # over-length string gets truncated
+        "fail_detail": "y" * 500,          # raw message is capped separately
         "evil_field": "drop me",           # unknown field must be dropped
         "rows": "999",                     # numeric strings are accepted
         "fps": 58.7,
@@ -118,7 +131,8 @@ def test_client_event_sanitization_bounds_fields() -> None:
     assert fields["benchmark"] is True
     assert fields["ttfr_ms"] == 596
     assert fields["rows"] == 999
-    assert len(fields["fail_stage"]) == 40
+    assert len(fields["fail_stage"]) == 24
+    assert len(fields["fail_detail"]) == 200
     assert "evil_field" not in fields
 
     assert sanitize_client_event({"type": "unknown_type"}) is None
