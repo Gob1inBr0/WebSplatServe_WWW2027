@@ -3,7 +3,7 @@
 
 import { store, persistProfiles, persistPrefs, defaultProfile, activeProfile, sessionPasswords, toast, navigate, deriveDataPaths } from "../store.js";
 import { parseSshCommand } from "../ssh-parse.js";
-import { getSshConfigHosts, probeRemoteDisk, resetRemoteGpu } from "../api.js";
+import { getSshConfigHosts, probeRemoteDisk, resetRemoteGpu, clearJobHistory } from "../api.js";
 import { t } from "../i18n.js";
 
 const { ref, computed } = Vue;
@@ -214,6 +214,22 @@ export default {
       }
     }
 
+    /* Clear the local training history — logical delete, like clearing
+       browser history: lists go empty, files on disk are untouched. */
+    const clearingHistory = ref(false);
+    async function clearHistory() {
+      if (!window.confirm(t("set.clearConfirm"))) return;
+      clearingHistory.value = true;
+      try {
+        const data = await clearJobHistory();
+        toast(`${t("set.clearDone")}: ${data.cleared ?? 0}`, "success", 8000);
+      } catch (err) {
+        toast(`${t("set.clearFailed")} ${err.message}`, "error", 9000);
+      } finally {
+        clearingHistory.value = false;
+      }
+    }
+
     function savePassword() {
       if (!active.value) { toast(t("set.needProfileFirst"), "error"); return; }
       sessionPasswords.set(active.value.id, passwordInput.value);
@@ -240,6 +256,7 @@ export default {
       sshHosts, sshHostsLoading, sshHostsLoaded, pickedSshHost, loadSshHosts, applySshHost,
       onUsernameInput, pathWarnings, probingDisk, diskProbe, probeDataDisk,
       resettingGpu, gpuResetReport, gpuResetSummary, resetGpu,
+      clearingHistory, clearHistory,
     };
   },
   template: `
@@ -342,6 +359,17 @@ export default {
       </ui-card>
 
       <!-- password for active profile -->
+      <!-- training history -->
+      <ui-card :title="$t('set.clearTitle')" style="margin-bottom:20px">
+        <div class="card-body" style="padding-top:2px">
+          <p class="small muted" style="margin-bottom:10px">{{ $t("set.clearDesc") }}</p>
+          <div class="row" style="gap:8px">
+            <ui-button size="sm" icon="trash" :disabled="clearingHistory"
+                       @click="clearHistory">{{ clearingHistory ? $t("set.clearWorking") : $t("set.clearButton") }}</ui-button>
+          </div>
+        </div>
+      </ui-card>
+
       <!-- server training reset -->
       <ui-card :title="$t('set.resetTitle')" style="margin-bottom:20px;border-color:var(--warn,#e6b450)">
         <div class="card-body" style="padding-top:2px">

@@ -2210,8 +2210,11 @@ class ApiHandler(SimpleHTTPRequestHandler):
       json_response(self, {"algorithm": adapter, "operations": supported_operations(adapter), "validation": validate_adapter(adapter)})
       return
     if parsed.path == "/api/jobs":
+      # Logical delete: cleared records stay on disk but vanish from the
+      # console lists unless explicitly requested back.
+      include_deleted = "include_deleted" in query
       ordered_jobs = sorted(
-        (enrich_job(job) for job in list(JOBS.values())),
+        (enrich_job(job) for job in list(JOBS.values()) if include_deleted or not job.get("deleted")),
         key=lambda item: (
           -float(item.get("created_at") or 0),
           str(item.get("dataset") or ""),
@@ -2924,6 +2927,19 @@ class ApiHandler(SimpleHTTPRequestHandler):
       json_response(self, {"ok": True, "disk": report})
       return
 
+    if parsed.path == "/api/jobs/clear-history":
+      # Clearing history like a browser does: every record is flagged deleted
+      # (reversible flag, files untouched), lists hide it from now on.
+      cleared = 0
+      for job in JOBS.values():
+        if job.get("deleted"):
+          continue
+        job["deleted"] = True
+        job["deleted_at"] = time.time()
+        persist_job_state(job)
+        cleared += 1
+      json_response(self, {"ok": True, "cleared": cleared})
+      return
     if parsed.path == "/api/remote/gpu-reset":
       # Operator action from Settings: force-kill every GPU compute process on
       # the server (the GPU keeper included, watcher first so workers do not

@@ -90,6 +90,7 @@ export const environmentCheck = (family) =>
 /* ---------- jobs ---------- */
 
 export const getJobs = () => request("/api/jobs");
+export const clearJobHistory = () => request("/api/jobs/clear-history", { method: "POST", body: {}, timeoutMs: 30000 });
 export const getJob = (id) => request(`/api/jobs/${id}`);
 export const getJobLogDelta = (id, cursor) =>
   request(`/api/jobs/${id}/logs?cursor=${Math.max(0, Number(cursor) || 0)}`);
