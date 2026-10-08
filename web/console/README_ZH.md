@@ -38,7 +38,7 @@ js/api.js          后端 /api 接口的类型化封装
 js/i18n.js         英/中词典（t() 从 store 读取，切换即时生效）
 js/ssh-parse.js    解析粘贴的 SSH 命令
 js/components/     UI 组件库 + SVG 折线图
-js/pages/          仪表盘、向导、任务、数据集、查看器、设置
+js/pages/          仪表盘、向导、任务、数据集、算法管理、查看器、设置
 ```
 
 服务端会自动把 API 访问 token 注入本页面；命令行调用仍需要 `X-Auth-Token` 请求头（见主 README）。

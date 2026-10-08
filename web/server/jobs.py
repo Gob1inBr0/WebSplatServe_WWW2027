@@ -27,6 +27,7 @@ from typing import Any, Callable, Dict
 
 from web.server.adapter_registry import get_adapter, list_adapters
 from web.server.gpu_queue import GpuLaunchGate
+from web.server import algorithms_manager
 from web.server.remote_executor import (
   RemoteExecutionError,
   build_remote_paths,
@@ -95,10 +96,18 @@ REMOTE_RESULT_IDENTITY_FIELDS = ("host", "port", "username", "output_root")
 
 # FIFO launch gate in front of remote tmux starts: waits for a free GPU slot
 # (concurrency cap + free-memory threshold, see web/config/queue.json).
+# env_setup installs are CPU/IO work and never occupy a GPU launch slot.
 GPU_GATE = GpuLaunchGate(
-  occupying_provider=lambda: list(JOBS.values()),
+  occupying_provider=lambda: [
+    job for job in JOBS.values()
+    if str(job.get("job_type", "")) != algorithms_manager.SETUP_JOB_TYPE
+  ],
   probe_fn=remote_gpu_probe,
 )
+
+# Installs are CPU/IO-bound on the training server (clone, compile, pip), so
+# they bypass the GPU launch gate but cap their own concurrency at 2.
+ENV_SETUP_SEMAPHORE = threading.Semaphore(2)
 
 
 METRICS_CSV_COLUMNS = ["timestamp", "channel", "iter", "loss", "psnr", "ssim", "lpips", "size_mb"]
@@ -1289,6 +1298,8 @@ def apply_remote_poll_result(job: Dict[str, Any], poll_result: Dict[str, Any]) -
   ):
     if key in poll_result:
       job[key] = poll_result[key]
+  if poll_result.get("setup_steps"):
+    job["setup_steps"] = poll_result["setup_steps"]
   if str(job.get("status")) == "failed":
     reason = str(poll_result.get("message") or "").strip()
     if reason in ("", "Remote training failed."):
@@ -1519,6 +1530,266 @@ def start_scaffold_decode_thread(job: Dict[str, Any], remote_config: Dict[str, A
       job["decode_error"] = str(exc)[:500]
       append_job_log_line(job, "stderr", f"[Scaffold-decode] failed: {exc}\n")
       persist_job_state(job)
+
+  threading.Thread(target=runner, daemon=True).start()
+
+
+def _run_once_cell() -> tuple[Callable[[], None], Callable[[], None]]:
+  """Idempotent action cell: run() fires fn exactly once, however often called."""
+  fired = threading.Event()
+  lock = threading.Lock()
+  state = {"fn": None}
+
+  def set_fn(fn: Callable[[], None]) -> None:
+    with lock:
+      state["fn"] = fn
+
+  def run() -> None:
+    if fired.is_set():
+      return
+    with lock:
+      fn = state["fn"]
+      fired.set()
+    if fn:
+      try:
+        fn()
+      except Exception:
+        LOGGER.exception("once-cell callback failed")
+
+  return set_fn, run
+
+
+def _finalize_env_setup_success(job: Dict[str, Any], remote_config: Dict[str, Any]) -> None:
+  """After a completed install: read the server registry and point the local
+  adapter override at the fresh repo so the training page can use it at once."""
+  family = str(job.get("algorithm_family", "")).strip()
+  if not family:
+    return
+  try:
+    registry = algorithms_manager.fetch_remote_registry(remote_config)
+    entry = algorithms_manager.get_registry_entry(registry, family)
+    if not entry:
+      append_job_log_line(
+        job, "stderr",
+        f"[EnvSetup] Install completed but the registry has no entry for {family}; adapter not updated.\n",
+      )
+      return
+    job["setup_result"] = {
+      "wrapper": str(entry.get("wrapper", "")),
+      "entry": str(entry.get("entry", "")),
+      "repo_dir": str(entry.get("repo_dir", "")),
+      "venv": str(entry.get("venv", "")),
+    }
+    job["setup_registry_snapshot"] = {"algorithms": {family: entry}}
+    adapter = algorithms_manager.apply_install_result_to_adapter(
+      family,
+      entry,
+      repo_url=str(job.get("setup_repo_url", "") or ""),
+      label=str(job.get("setup_label", "") or ""),
+      pip_modules=list(job.get("setup_pip_modules") or []),
+    )
+    append_job_log_line(
+      job, "stdout",
+      f"[EnvSetup] Adapter is ready: repo_path={adapter.get('repo_path', '')} "
+      f"(entry={entry.get('entry', '')}, wrapper={entry.get('wrapper', '')})\n",
+    )
+  except Exception as exc:  # registry read/sync must not flip the job to failed
+    append_job_log_line(
+      job, "stderr",
+      f"[EnvSetup] Install succeeded but the console-side adapter sync failed: {exc}\n",
+    )
+
+
+def start_env_setup_monitor_thread(
+  job: Dict[str, Any],
+  remote_config: Dict[str, Any],
+  *,
+  on_terminal: Callable[[], None] | None = None,
+) -> None:
+  """Poll a detached env_setup job: log stream + step states + final adapter
+  sync. No GPU gate, no result download, no auto-retry — retries are explicit
+  (the generated script itself skips already-succeeded steps)."""
+  with REMOTE_MONITOR_START_LOCK:
+    if job.get("_monitoring"):
+      return
+    job["_monitoring"] = True
+    job["_remote_config"] = dict(remote_config)
+
+  def monitor() -> None:
+    consecutive_failures = 0
+    first_failure_at = 0.0
+    try:
+      while True:
+        if job.get("cancel_requested"):
+          break
+        try:
+          poll_result = poll_remote_detached_job(
+            remote_config=remote_config,
+            remote_status_path=str(job.get("remote_status_path", "")),
+            remote_log_path=str(job.get("remote_log_path", "")),
+            remote_output_dir=str(job.get("remote_output_dir", "")),
+            local_output_dir=str(job.get("output_dir", "")),
+            log_cursor=int(job.get("remote_log_cursor", 0) or 0),
+            download_output=False,
+            expected_job_id=str(job.get("id", "")),
+            expected_family=str(job.get("algorithm_family", "")),
+          )
+          consecutive_failures = 0
+          first_failure_at = 0.0
+          job.pop("remote_monitor_error", None)
+          job.pop("remote_monitor_failures", None)
+          apply_remote_poll_result(job, poll_result)
+          if poll_result.get("setup_steps"):
+            job["setup_steps"] = poll_result["setup_steps"]
+          persist_job_state(job)
+          if is_job_terminal(job):
+            if str(job.get("status")) == "completed":
+              _finalize_env_setup_success(job, remote_config)
+            if not job.get("finished_at"):
+              job["finished_at"] = time.time()
+            job["monitor_state"] = "completed"
+            persist_job_state(job)
+            break
+        except Exception as exc:  # pragma: no cover - network dependent
+          now = time.time()
+          consecutive_failures += 1
+          if not first_failure_at:
+            first_failure_at = now
+          elapsed = now - first_failure_at
+          job["monitor_state"] = "monitoring"
+          job["remote_stage"] = "detached_monitor_retrying"
+          job["remote_monitor_error"] = str(exc)
+          job["remote_monitor_failures"] = consecutive_failures
+          if consecutive_failures == 1 or consecutive_failures % 5 == 0:
+            append_job_log_line(
+              job,
+              "stderr",
+              f"[Monitor] Detached setup monitor transient error "
+              f"({consecutive_failures}/{REMOTE_MONITOR_MAX_CONSECUTIVE_FAILURES}): {exc}\n",
+            )
+          persist_job_state(job)
+          if (
+            consecutive_failures >= REMOTE_MONITOR_MAX_CONSECUTIVE_FAILURES
+            or elapsed >= REMOTE_MONITOR_MAX_FAILURE_SECONDS
+          ):
+            job["monitor_state"] = "needs_remote_config"
+            job["remote_stage"] = "detached_monitor_disconnected"
+            append_job_log_line(job, "stderr", f"[Monitor] Detached setup monitor disconnected: {exc}\n")
+            persist_job_state(job)
+            break
+          time.sleep(min(
+            REMOTE_MONITOR_RETRY_MAX_SECONDS,
+            REMOTE_MONITOR_RETRY_MIN_SECONDS + max(0, consecutive_failures - 1),
+          ))
+          continue
+        time.sleep(3)
+    finally:
+      job["_monitoring"] = False
+      if on_terminal:
+        on_terminal()
+
+  threading.Thread(target=monitor, daemon=True).start()
+
+
+def start_env_setup_job_thread(
+  job: Dict[str, Any],
+  *,
+  remote_config: Dict[str, Any],
+  repo_url: str,
+  entry: str,
+  pip_modules: list[str] | None = None,
+) -> None:
+  """Generate the algs-setup script, start it in remote tmux, and monitor it.
+  Holds one of the 2 install slots until the job reaches a terminal state."""
+  set_release, release_slot = _run_once_cell()
+  set_release(ENV_SETUP_SEMAPHORE.release)
+
+  def runner() -> None:
+    ensure_job_logging(job)
+    if job.get("cancel_requested"):
+      job["status"] = "canceled"
+      job["finished_at"] = time.time()
+      return
+    job["monitor_state"] = "waiting_for_slot"
+    persist_job_state(job)
+    append_job_log_line(job, "stdout", "[EnvSetup] Waiting for an install slot (at most 2 concurrent installs).\n")
+    ENV_SETUP_SEMAPHORE.acquire()
+    try:
+      if job.get("cancel_requested"):
+        job["status"] = "canceled"
+        job["finished_at"] = time.time()
+        return
+      job["status"] = "running"
+      job["started_at"] = time.time()
+      job["remote_stage"] = "starting"
+      job["monitor_state"] = "starting"
+      persist_job_state(job)
+
+      family = str(job.get("algorithm_family", "")).strip()
+      layout = algorithms_manager.remote_setup_layout(remote_config)
+      job_paths = algorithms_manager.setup_remote_paths(remote_config, family=family, job_id=str(job.get("id", "")))
+      script_text = algorithms_manager.generate_setup_script(
+        name=family,
+        family=family,
+        repo_url=repo_url,
+        entry=entry or algorithms_manager.DEFAULT_ENTRY,
+        base_python=str(remote_config.get("python", "python3")),
+        layout=layout,
+        job_paths=job_paths,
+        job_id=str(job.get("id", "")),
+        pip_modules=pip_modules or [],
+      )
+      job["remote_tmux_session"] = job_paths["remote_tmux_session"]
+      job["remote_tmux_attach_command"] = job_paths["remote_tmux_attach_command"]
+      job["remote_run_key"] = job_paths["run_key"]
+      persist_job_state(job)
+
+      result = algorithms_manager.start_remote_setup_detached(
+        remote_config=remote_config,
+        job_id=str(job.get("id", "")),
+        family=family,
+        script_text=script_text,
+        run_key=job_paths["run_key"],
+        log_callback=lambda channel, line: append_job_log_line(job, channel, line),
+        stage_callback=lambda stage: job.__setitem__("remote_stage", stage),
+      )
+      job["remote_detached"] = True
+      job["execution_backend"] = result.get("execution_backend", "tmux")
+      job["safe_to_close_web"] = True
+      job["monitor_state"] = result.get("monitor_state", "monitoring")
+      job["remote_pid"] = result.get("remote_pid", "")
+      job["remote_tmux_session"] = result.get("remote_tmux_session", job.get("remote_tmux_session", ""))
+      job["remote_tmux_attach_command"] = result.get("remote_tmux_attach_command", job.get("remote_tmux_attach_command", ""))
+      job["remote_run_key"] = result.get("remote_run_key", job.get("remote_run_key", ""))
+      job["tmux_available"] = result.get("tmux_available", True)
+      job["tmux_install"] = result.get("tmux_install", job.get("tmux_install", {}))
+      job["remote_job_dir"] = result.get("remote_job_dir", "")
+      job["remote_run_script"] = result.get("remote_run_script", "")
+      job["remote_log_path"] = result.get("remote_log_path", "")
+      job["remote_status_path"] = result.get("remote_status_path", "")
+      job["remote_exit_code_path"] = result.get("remote_exit_code_path", "")
+      job["remote_output_dir"] = result.get("remote_output_dir", "")
+      job["remote_log_cursor"] = 0
+      job["status"] = "running"
+      job["remote_stage"] = "remote_detached_running"
+      append_job_log_line(job, "stdout", "[Tmux] Safe to close page. The install continues inside the tmux session.\n")
+      persist_job_state(job)
+      start_env_setup_monitor_thread(job, remote_config, on_terminal=release_slot)
+    except Exception as exc:  # pragma: no cover - network dependent
+      LOGGER.exception("Env setup job %s failed", job.get("id", ""))
+      if job.get("cancel_requested") or getattr(exc, "code_hint", "") == "WGSC-JOB-CANCELED":
+        job["status"] = "canceled"
+        job["remote_stage"] = "canceled"
+      else:
+        job["status"] = "failed"
+        job["failure_reason"] = str(exc)[:400]
+      append_job_log_line(job, "stderr", str(exc))
+      merged_stderr = f"{job.get('stderr', '').rstrip()}\n{exc}".strip()
+      job["stderr"] = merged_stderr[-12000:]
+      job["finished_at"] = time.time()
+      persist_job_state(job)
+      release_slot()
+    # Success path: the monitor owns release_slot() (fires on terminal state).
 
   threading.Thread(target=runner, daemon=True).start()
 

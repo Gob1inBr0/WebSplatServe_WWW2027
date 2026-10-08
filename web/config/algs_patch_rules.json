@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "comment": "已知坑补丁规则库。装配脚本的 patch 步骤应用 proactive!=false 的规则；自愈签名表命中后可按 rule id 引用任意规则（可限定在 traceback 文件范围内）。when 支持: file_glob(相对仓库路径匹配)、contains、not_contains、contains_regex；then.action 支持: insert_after_first_include / insert_after_docstring / sed / sed_regex（sed* 可带 replacements 列表，find/replace 支持 \\1 反向引用）。",
+  "rules": [
+    {
+      "id": "cfloat-cuda12",
+      "when": {
+        "file_glob": "**/*.cu",
+        "contains": "FLT_MAX",
+        "not_contains": "#include <cfloat>"
+      },
+      "then": {
+        "action": "insert_after_first_include",
+        "line": "#include <cfloat>"
+      },
+      "note": "CUDA 12.8 不再通过 cuda/climits 传递 FLT_MAX，需显式 include <cfloat>"
+    },
+    {
+      "id": "np-cast-numpy2",
+      "when": {
+        "file_glob": "**/*.py",
+        "contains_regex": "np\\.cast\\["
+      },
+      "then": {
+        "action": "sed_regex",
+        "replacements": [
+          {
+            "find": "np\\.cast\\[(np\\.[a-zA-Z0-9_]+)\\]\\(([^()]*)\\)",
+            "replace": "np.asarray(\\2, dtype=\\1)"
+          }
+        ]
+      },
+      "note": "numpy 2.0 移除 np.cast；改为 np.asarray(x, dtype=...)"
+    },
+    {
+      "id": "future-annotations",
+      "when": {
+        "file_glob": "**/train.py",
+        "contains_regex": ": (Scene|GaussianModel)\\b",
+        "not_contains": "from __future__ import annotations"
+      },
+      "then": {
+        "action": "insert_after_docstring",
+        "line": "from __future__ import annotations"
+      },
+      "note": "旧 3DGS 系代码在函数注解里前向引用 Scene/GaussianModel，无 future import 时崩溃"
+    },
+    {
+      "id": "arange-device",
+      "when": {
+        "file_glob": "**/*.py",
+        "contains_regex": "torch\\.arange\\("
+      },
+      "then": {
+        "action": "sed_regex",
+        "replacements": [
+          {
+            "find": "torch\\.arange\\(len\\((\\w+)\\)\\)",
+            "replace": "torch.arange(len(\\1), device=\\1.device)"
+          },
+          {
+            "find": "torch\\.arange\\((\\w+)\\.shape\\[(\\d+)\\]\\)",
+            "replace": "torch.arange(\\1.shape[\\2], device=\\1.device)"
+          }
+        ]
+      },
+      "note": "indices should be either on cpu or on the same device：可推断容器的 arange 补 device 参数；裸常量 arange 无法推断，需手改"
+    },
+    {
+      "id": "torch-load-weights-only",
+      "proactive": false,
+      "when": {
+        "file_glob": "**/*.py",
+        "contains": "torch.load("
+      },
+      "then": {
+        "action": "sed_regex",
+        "replacements": [
+          {
+            "find": "torch\\.load\\(([^(),]*)\\)",
+            "replace": "torch.load(\\1, weights_only=False)"
+          }
+        ]
+      },
+      "note": "torch 2.6+ 默认 weights_only=True，加载旧 checkpoint 报 Unsupported global；只在签名命中后对 traceback 文件应用，不做全仓 proactive 改写"
+    }
+  ]
+}

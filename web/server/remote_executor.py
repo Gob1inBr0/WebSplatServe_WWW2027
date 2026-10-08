@@ -3490,6 +3490,8 @@ def poll_remote_detached_job(
       "result_path": str(status_payload.get("result_path", "")),
       "partial_success": bool(status_payload.get("partial_success")),
       "failure_stage": str(status_payload.get("failure_stage", "")),
+      # env_setup jobs carry per-step progress inside the status marker.
+      "setup_steps": status_payload.get("setup_steps") or [],
       "updated_at": status_payload.get("updated_at", ""),
       "log_text": log_delta["text"],
       "log_cursor": log_delta["cursor"],

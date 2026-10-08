@@ -67,6 +67,16 @@ function withTokenQuery(url) {
 export const getHealth = () => request("/api/health", { timeoutMs: 8000 });
 export const shutdownServer = () => request("/api/shutdown", { method: "POST", body: {}, timeoutMs: 8000 });
 export const getAlgorithms = () => request("/api/algorithms");
+export const getAlgorithmsCatalog = () => request("/api/algorithms/catalog");
+export const scanAlgorithmsCatalog = (remote) =>
+  request("/api/algorithms/catalog", { method: "POST", body: { remote }, timeoutMs: 60000 });
+export const installAlgorithm = (payload) =>
+  request("/api/algorithms/install", { method: "POST", body: payload, timeoutMs: 60000 });
+export const retryAlgorithmInstall = (name, remote) =>
+  request(`/api/algorithms/${encodeURIComponent(name)}/retry`, { method: "POST", body: { remote }, timeoutMs: 60000 });
+export const uninstallAlgorithm = (name, remote, removeRepo = false) =>
+  request(`/api/algorithms/${encodeURIComponent(name)}/uninstall`, { method: "POST", body: { remote, remove_repo: removeRepo }, timeoutMs: 120000 });
+export const getInstallJob = (id) => request(`/api/algorithms/install/${encodeURIComponent(id)}`);
 export const getSshConfigHosts = () => request("/api/ssh-config/hosts", { timeoutMs: 8000 });
 export const listRemoteDatasets = (remote) =>
   request("/api/remote-datasets", { method: "POST", body: { remote }, timeoutMs: 60000 });

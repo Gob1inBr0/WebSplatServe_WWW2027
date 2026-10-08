@@ -58,7 +58,7 @@ js/api.js          typed wrappers around the backend /api endpoints
 js/i18n.js         en/zh dictionary (t() reads the store, so switches are live)
 js/ssh-parse.js    parses pasted SSH commands
 js/components/     UI kit + SVG line chart
-js/pages/          dashboard, wizard, runs, datasets, viewer, settings
+js/pages/          dashboard, wizard, runs, datasets, algorithms, viewer, settings
 ```
 
 The server injects the API access token into this page automatically; CLI

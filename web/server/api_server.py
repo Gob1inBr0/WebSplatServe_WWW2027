@@ -25,7 +25,7 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from shutil import which
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, List
 from urllib.parse import parse_qs, urlparse
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -244,6 +244,7 @@ from web.server.jobs import (
   start_remote_job_thread,
   start_remote_monitor_thread,
   start_scaffold_decode_thread,
+  start_env_setup_job_thread,
   unfinished_flow_jobs,
   unique_remote_run_key,
   update_job_artifacts,
@@ -258,6 +259,7 @@ from web.server.web_security import (
   safe_generated_child,
 )
 from web.server.telemetry import classify_user_agent, get_telemetry, sanitize_client_event
+from web.server import algorithms_manager
 from web.server.web_security import (
   MANUAL_ZH_URL,
   SECURITY_CONFIG_FILE,
@@ -1825,6 +1827,112 @@ def csv_text_response(handler: "ApiHandler", text: str, *, download_name: str) -
   handler.wfile.write(body)
 
 
+# ---------------------------------------------------------------------------
+# Algorithm auto-install (env_setup) — catalog assembly helpers
+# ---------------------------------------------------------------------------
+
+def _env_setup_jobs_by_family(*, terminal: bool) -> Dict[str, Dict[str, Any]]:
+  """Latest env_setup job per family (active ones, or terminal failed ones)."""
+  picked: Dict[str, Dict[str, Any]] = {}
+  for job in sorted(list(JOBS.values()), key=lambda item: float(item.get("created_at") or 0)):
+    if str(job.get("job_type", "")) != algorithms_manager.SETUP_JOB_TYPE:
+      continue
+    if is_job_terminal(job) != terminal:
+      continue
+    if terminal and str(job.get("status", "")) != "failed":
+      continue
+    family = str(job.get("algorithm_family", "")).strip()
+    if family:
+      picked[family] = job
+  return picked
+
+
+def _local_registry_snapshot() -> Dict[str, Any]:
+  """Latest registry view reconstructed from finished install jobs (the server
+  holds no local copy of the remote registry between installs)."""
+  algorithms: Dict[str, Any] = {}
+  for job in sorted(JOBS.values(), key=lambda item: float(item.get("created_at") or 0)):
+    snapshot = job.get("setup_registry_snapshot")
+    if isinstance(snapshot, dict) and isinstance(snapshot.get("algorithms"), dict):
+      algorithms.update(snapshot["algorithms"])
+  return {"algorithms": algorithms}
+
+
+def _algorithms_catalog_payload(
+  extra_registry: Dict[str, Any] | None = None,
+  discovered: List[str] | None = None,
+) -> Dict[str, Any]:
+  registry = _local_registry_snapshot()
+  for name, entry in ((extra_registry or {}).get("algorithms") or {}).items():
+    if isinstance(entry, dict):
+      registry["algorithms"][name] = entry
+  return algorithms_manager.build_catalog(
+    registry=registry,
+    active_setups=_env_setup_jobs_by_family(terminal=False),
+    failed_setups=_env_setup_jobs_by_family(terminal=True),
+    discovered=discovered or [],
+  )
+
+
+def _create_env_setup_job(
+  *,
+  name: str,
+  repo_url: str,
+  entry: str,
+  label: str,
+  pip_modules: List[str],
+  validated_remote: Dict[str, Any],
+) -> Dict[str, Any]:
+  job_id = str(uuid.uuid4())
+  resolved_output_dir = remote_job_local_output_dir(algorithms_manager.SETUP_SESSION_ID, name, job_id)
+  Path(resolved_output_dir).mkdir(parents=True, exist_ok=True)
+  job = {
+    "id": job_id,
+    "status": "queued",
+    "job_type": algorithms_manager.SETUP_JOB_TYPE,
+    "operation": algorithms_manager.SETUP_JOB_TYPE,
+    "algorithm_family": name,
+    "representation": "sh",
+    "command": f"algs-setup {name}",
+    "created_at": time.time(),
+    "workspace": "",
+    "output_dir": resolved_output_dir,
+    "session_id": algorithms_manager.SETUP_SESSION_ID,
+    "capture_id": "",
+    "dataset_name": name,
+    "setup_repo_url": repo_url,
+    "setup_entry": entry,
+    "setup_label": label or name,
+    "setup_pip_modules": list(pip_modules or []),
+    "setup_steps": [],
+    "repo_path": "",
+    "cwd": "",
+    "remote": sanitize_remote_config(validated_remote),
+    "remote_stage": "queued",
+    "remote_detached": False,
+    "safe_to_close_web": False,
+    "monitor_state": "queued",
+    "metrics": {},
+    "step_result": {
+      "step": "algorithms",
+      "code": "WGSC-ALGS-QUEUED",
+      "message": "Environment setup job queued.",
+    },
+  }
+  ensure_job_logging(job)
+  JOBS[job_id] = job
+  persist_job_state(job)
+  prune_job_history()
+  start_env_setup_job_thread(
+    job,
+    remote_config=validated_remote,
+    repo_url=repo_url,
+    entry=entry,
+    pip_modules=list(pip_modules or []),
+  )
+  return job
+
+
 
 
 class ApiHandler(SimpleHTTPRequestHandler):
@@ -2049,8 +2157,30 @@ class ApiHandler(SimpleHTTPRequestHandler):
       algorithms = list_adapters()
       json_response(self, {"algorithms": algorithms, "validation": [validate_adapter(item) for item in algorithms]})
       return
+    if parsed.path == "/api/algorithms/catalog":
+      # Local view: adapters + in-flight install jobs + registry snapshots from
+      # finished installs. POST the same path with {remote} for a live scan.
+      json_response(self, _algorithms_catalog_payload())
+      return
     if parsed.path.startswith("/api/algorithms/"):
-      family = parsed.path.split("/")[-1]
+      parts = parsed.path.strip("/").split("/")
+      if len(parts) == 4 and parts[2] == "install":
+        job = JOBS.get(parts[3])
+        if not job:
+          json_response(self, {"ok": False, "error": f"Unknown install job: {parts[3]}"}, status=404)
+          return
+        ensure_job_logging(job)
+        json_response(self, {
+          "ok": True,
+          "job": enrich_job(job),
+          "setup_steps": job.get("setup_steps", []),
+          "step_order": algorithms_manager.SETUP_STEP_ORDER,
+        })
+        return
+      if len(parts) != 3:
+        json_response(self, {"error": f"Unsupported endpoint: {parsed.path}"}, status=404)
+        return
+      family = parts[2]
       adapter = get_adapter(family)
       if not adapter:
         json_response(self, {"error": f"Unknown algorithm family: {family}"}, status=404)
@@ -2854,6 +2984,213 @@ class ApiHandler(SimpleHTTPRequestHandler):
       })
       return
 
+    if parsed.path == "/api/algorithms/catalog":
+      # Live server scan: read the remote registry and list algs/ repo dirs.
+      try:
+        remote_config_input = extract_remote_config_input(payload)
+        report = algorithms_manager.scan_remote_algs(remote_config_input)
+      except RemoteExecutionError as exc:
+        error_response(
+          self,
+          code=exc.code_hint or "WGSC-ALGS-CATALOG-001",
+          step="algorithms",
+          message=str(exc),
+          reason=f"stage={exc.stage or 'unknown'}",
+          status=400,
+        )
+        return
+      json_response(self, _algorithms_catalog_payload(
+        extra_registry=report.get("registry"),
+        discovered=report.get("discovered") or [],
+      ))
+      return
+
+    if parsed.path == "/api/algorithms/install" or (
+      parsed.path.startswith("/api/algorithms/") and parsed.path.endswith(("/retry", "/uninstall"))
+    ):
+      parts = parsed.path.strip("/").split("/")
+      action = "install" if parsed.path == "/api/algorithms/install" else parts[3]
+      raw_name = str(payload.get("name", "")).strip() if action == "install" else parts[2]
+      if not raw_name:
+        error_response(
+          self,
+          code="WGSC-ALGS-NAME-001",
+          step="algorithms",
+          message="name is required.",
+          status=400,
+        )
+        return
+
+      # Resolve the algorithm identity: a known adapter family, or a custom
+      # repo install (slug name + mandatory https repo_url).
+      adapter = get_adapter(raw_name)
+      name = raw_name if adapter else algorithms_manager.safe_setup_name(raw_name)
+
+      # Pure input validation first, before touching the remote config.
+      custom_url = ""
+      entry = str(payload.get("entry", "")).strip() or algorithms_manager.DEFAULT_ENTRY
+      label = str(payload.get("label", "")).strip()
+      if action == "install":
+        try:
+          custom_url = algorithms_manager.validate_repo_url(str(payload.get("repo_url", "")).strip())
+        except RemoteExecutionError as exc:
+          error_response(
+            self,
+            code=exc.code_hint or "WGSC-ALGS-URL-001",
+            step="algorithms",
+            message=str(exc),
+            status=400,
+          )
+          return
+        if re.search(r"[^A-Za-z0-9_./-]", entry):
+          error_response(
+            self,
+            code="WGSC-ALGS-ENTRY-001",
+            step="algorithms",
+            message="entry must be a plain relative file path (e.g. train.py).",
+            status=400,
+          )
+          return
+        if not adapter and not custom_url:
+          error_response(
+            self,
+            code="WGSC-ALGS-URL-003",
+            step="algorithms",
+            message=(
+              f"Unknown algorithm '{raw_name}': custom installs require an https repo_url "
+              "(or install one of the catalog algorithms)."
+            ),
+            status=400,
+          )
+          return
+        if not custom_url and not algorithms_manager.install_params_for(name)["repo_url"]:
+          error_response(
+            self,
+            code="WGSC-ALGS-URL-004",
+            step="algorithms",
+            message=f"{name} has no repo_url in its adapter declaration; provide one to install it.",
+            status=400,
+          )
+          return
+
+      try:
+        remote_config_input = extract_remote_config_input(payload)
+        validated_remote = validate_remote_config(remote_config_input)
+        algorithms_manager.remote_setup_layout(validated_remote)
+      except RemoteExecutionError as exc:
+        error_response(
+          self,
+          code=exc.code_hint or "WGSC-ALGS-REMOTE-001",
+          step="algorithms",
+          message=str(exc),
+          reason=f"stage={exc.stage or 'config'}",
+          status=400,
+        )
+        return
+
+      if action == "uninstall":
+        active = _env_setup_jobs_by_family(terminal=False).get(name)
+        if active:
+          error_response(
+            self,
+            code="WGSC-ALGS-UNINSTALL-BUSY",
+            step="algorithms",
+            message=f"An install of {name} is currently running (job {active.get('id')}); cancel it first.",
+            status=400,
+            details={"install_job_id": active.get("id")},
+          )
+          return
+        try:
+          result = algorithms_manager.uninstall_remote_algorithm(
+            remote_config=validated_remote,
+            name=name,
+            remove_repo=bool(payload.get("remove_repo")),
+          )
+        except RemoteExecutionError as exc:
+          error_response(
+            self,
+            code=exc.code_hint or "WGSC-ALGS-UNINSTALL-001",
+            step="algorithms",
+            message=str(exc),
+            status=400,
+          )
+          return
+        # Drop the console-side repo pointers so the training page stops
+        # offering the algorithm as ready.
+        try:
+          update_adapter_override(name, {"repo_path": None, "default_cwd": None, "env_setup": None})
+        except Exception:
+          LOGGER.exception("Could not clear adapter override for %s", name)
+        json_response(self, {"ok": True, "uninstalled": result})
+        return
+
+      if action == "retry":
+        # Reuse the parameters of the latest install attempt for this family.
+        previous = _env_setup_jobs_by_family(terminal=True).get(name) or _env_setup_jobs_by_family(terminal=False).get(name) or {}
+        repo_url = str(previous.get("setup_repo_url", "") or "")
+        entry = str(previous.get("setup_entry", "") or algorithms_manager.DEFAULT_ENTRY)
+        label = str(previous.get("setup_label", "") or name)
+        pip_modules = list(previous.get("setup_pip_modules") or [])
+        if not repo_url:
+          params = algorithms_manager.install_params_for(name)
+          repo_url = params["repo_url"]
+          pip_modules = pip_modules or params["pip_modules"]
+          label = label or params["label"]
+      else:
+        params = algorithms_manager.install_params_for(name) if adapter else {"repo_url": "", "pip_modules": [], "label": name}
+        repo_url = custom_url or params["repo_url"]
+        label = label or params.get("label", name)
+        pip_modules = list(params.get("pip_modules") or [])
+
+      if not repo_url.startswith("https://"):
+        error_response(
+          self,
+          code="WGSC-ALGS-URL-005",
+          step="algorithms",
+          message="repo_url must use https.",
+          status=400,
+        )
+        return
+
+      active = _env_setup_jobs_by_family(terminal=False).get(name)
+      if active:
+        error_response(
+          self,
+          code="WGSC-ALGS-BUSY-001",
+          step="algorithms",
+          message=f"An install of {name} is already running (job {active.get('id')}).",
+          status=400,
+          details={"install_job_id": active.get("id")},
+          next_action="Track progress on the Algorithms page; retry after it finishes.",
+        )
+        return
+
+      job = _create_env_setup_job(
+        name=name,
+        repo_url=repo_url,
+        entry=entry,
+        label=label,
+        pip_modules=pip_modules,
+        validated_remote=validated_remote,
+      )
+      json_response(
+        self,
+        {
+          "ok": True,
+          "code": "WGSC-ALGS-QUEUED",
+          "step": "algorithms",
+          "job": enrich_job(job),
+          "install": {
+            "name": name,
+            "repo_url": repo_url,
+            "entry": entry,
+            "steps": algorithms_manager.SETUP_STEP_ORDER,
+          },
+        },
+        status=202,
+      )
+      return
+
     if parsed.path == "/api/run-remote-algorithm":
       family = payload.get("algorithm_family", "")
       if not family:
@@ -2876,6 +3213,24 @@ class ApiHandler(SimpleHTTPRequestHandler):
           message=f"Unknown algorithm family: {family}",
           status=400,
           manual_anchor="#5-%E4%B8%80%E9%94%AE%E6%B5%81%E7%A8%8B%E6%8E%A8%E8%8D%90",
+        )
+        return
+
+      active_setup = _env_setup_jobs_by_family(terminal=False).get(family)
+      if active_setup:
+        # A half-installed algorithm (no venv / unpatched source) would fail at
+        # train time with confusing errors — block until the install settles.
+        error_response(
+          self,
+          code="WGSC-ALGS-TRAIN-BUSY",
+          step="step5",
+          message=(
+            f"Algorithm {family} is still being installed (job {active_setup.get('id')}). "
+            "Submit again once the install reaches ready."
+          ),
+          status=400,
+          details={"install_job_id": active_setup.get("id")},
+          next_action="Open the Algorithms page to track the install, then resubmit.",
         )
         return
 

@@ -40,6 +40,15 @@ def load_adapter_registry() -> Dict[str, Dict[str, Any]]:
     override = overrides.get(family, {})
     merged.update(override)
     registry[family] = merged
+  # Adapters that exist only as overrides: complete custom entries written by
+  # the algorithm auto-install page (custom git URL installs). They must carry
+  # their own "family" field to count — partial/stale override fragments are
+  # ignored rather than becoming half-empty adapters.
+  for family, override in overrides.items():
+    if family in registry or not isinstance(override, dict):
+      continue
+    if override.get("family") == family and override.get("operations"):
+      registry[family] = dict(override)
   return registry
 
 

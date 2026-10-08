@@ -3,7 +3,7 @@
 
 import { store, remoteConfig, hasPassword, activeProfile, sessionPasswords, toast, setRunName, navigate, defaultProfile, deriveDataPaths, pollOnce } from "../store.js";
 import { listRemoteDatasets } from "../api.js";
-import { getAlgorithms, remoteCheck, previewRun, submitRun, streamFrame, materializeSession } from "../api.js";
+import { getAlgorithms, getAlgorithmsCatalog, remoteCheck, previewRun, submitRun, streamFrame, materializeSession } from "../api.js";
 import { parseSshCommand } from "../ssh-parse.js";
 import { t } from "../i18n.js";
 
@@ -73,16 +73,28 @@ export default {
     const loadingAlgorithms = Vue.ref(true);
 
     onMounted(async () => {
+      // Install states are optional here — a missing catalog just means the
+      // dropdown falls back to the adapter validation it always used.
+      const installStates = new Map();
+      try {
+        const catalog = await getAlgorithmsCatalog();
+        for (const item of catalog.algorithms || []) installStates.set(item.name, item);
+      } catch { /* catalog endpoint unavailable → skip annotation */ }
       try {
         const data = await getAlgorithms();
         const readiness = new Map(
           (data.validation || []).map((v) => [v.family, v]),
         );
-        algorithms.value = (data.algorithms || []).map((a) => ({
-          ...a,
-          ready: readiness.get(a.family)?.is_ready !== false,
-          warnings: readiness.get(a.family)?.warnings || [],
-        }));
+        algorithms.value = (data.algorithms || []).map((a) => {
+          const installState = installStates.get(a.family) || null;
+          const installing = installState?.status === "installing";
+          return {
+            ...a,
+            ready: readiness.get(a.family)?.is_ready !== false && !installing,
+            installState,
+            warnings: readiness.get(a.family)?.warnings || [],
+          };
+        });
         syncFamilyToOperation();
       } catch (err) {
         toast(`${t("wiz.algorithmsFailed")}: ${err.message}`, "error");
@@ -99,6 +111,22 @@ export default {
     }));
     const selectedAlgorithm = computed(() => trainable.value.find((a) => a.family === draft.family) || null);
     const selectedAlgorithmWarnings = computed(() => selectedAlgorithm.value?.warnings || []);
+
+    function algorithmNote(a) {
+      if (a.ready) return "";
+      if (a.installState?.status === "installing") return " — " + t("wiz.algorithmInstalling");
+      return " — " + t("wiz.algorithmNotReady");
+    }
+
+    // Auto-installed adapters carry the absolute server-side repo path; the
+    // remote run script cd's into remote.repo_path, so forward it on submit
+    // (relative adapter paths — manual setups — leave the profile value alone).
+    function remoteForSubmit() {
+      const remote = remoteConfig();
+      const repoPath = String(selectedAlgorithm.value?.repo_path || "").trim();
+      if (repoPath.startsWith("/")) remote.repo_path = repoPath;
+      return remote;
+    }
 
     // The compress mode submits whatever operation the adapter actually exposes.
     const resolvedOperation = computed(() => {
@@ -254,7 +282,7 @@ export default {
         draft.precheckResult = null;
         draft.preview = null;
         const check = await remoteCheck({
-          remote: remoteConfig(),
+          remote: remoteForSubmit(),
           timeout_seconds: 20,
           algorithm_family: draft.family,
           use_existing_remote_dataset: draft.operationType !== "compress" && draft.source === "remote",
@@ -303,7 +331,7 @@ export default {
         checkpoint_path: draft.checkpointPath.trim(),
         input_path: isCompress ? draft.compressInputPath.trim() : "",
         preview_job_id: "",
-        remote: remoteConfig(),
+        remote: remoteForSubmit(),
         require_remote_check: true,
         ...training,
         ...extra,
@@ -366,6 +394,7 @@ export default {
 
     return {
       draft, algorithms, loadingAlgorithms, trainable, selectedAlgorithm, selectedAlgorithmWarnings,
+      algorithmNote, remoteForSubmit,
       resolvedOperation, profile,
       canNext, uploadLabel, addFiles, onDrop, pickRemoteDatasets, goNext,
       submitAll, confirmSubmit, applyPreset, PRESETS, TRAINING_DEFAULTS,
@@ -495,11 +524,15 @@ export default {
           <ui-field :label="$t('wiz.algorithm')" :hint="draft.operationType === 'compress' ? $t('wiz.algorithmCompressHint') : $t('wiz.algorithmHint')">
             <select class="select" v-model="draft.family">
               <option v-for="a in trainable" :key="a.family" :value="a.family" :disabled="!a.ready">
-                {{ a.label || a.family }}{{ a.ready ? "" : " — " + $t("wiz.algorithmNotReady") }}
+                {{ a.label || a.family }}{{ algorithmNote(a) }}
               </option>
             </select>
-            <div v-if="selectedAlgorithm && !selectedAlgorithm.ready" class="small warn-text" style="margin-top:6px">
+            <div v-if="selectedAlgorithm && !selectedAlgorithm.ready && selectedAlgorithm.installState?.status !== 'installing'" class="small warn-text" style="margin-top:6px">
               {{ $t("wiz.algorithmNotReadyHint") }}
+            </div>
+            <div v-if="selectedAlgorithm && selectedAlgorithm.installState?.status === 'installing'" class="small warn-text" style="margin-top:6px">
+              {{ $t("wiz.algorithmInstallingHint") }}
+              <button class="btn btn-ghost btn-sm" @click="navigate('algorithms')">{{ $t("wiz.algorithmInstallingLink") }}</button>
             </div>
           </ui-field>
           <ui-field :label="$t('wiz.runName')" :hint="$t('wiz.runNameHint')">

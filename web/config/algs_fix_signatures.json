@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "comment": "自愈错误签名表。冒烟/装配失败时按日志尾匹配 signature（正则），命中后执行 action：pip_install（缺模块→装包，module_map/git_sources 做名字映射）、apply_patch_rule（引用 algs_patch_rules.json 的规则 id，scope=traceback 时只改 traceback 里出现的文件）、none（只打提示）。修完自动重试，最多 3 轮。",
+  "module_map": {
+    "cv2": "opencv-python-headless",
+    "cv": "opencv-python-headless",
+    "yaml": "pyyaml",
+    "PIL": "pillow",
+    "pil": "pillow",
+    "skimage": "scikit-image",
+    "matplotlib": "matplotlib",
+    "pandas": "pandas",
+    "scipy": "scipy",
+    "tqdm": "tqdm",
+    "plyfile": "plyfile",
+    "lpips": "lpips",
+    "tensorboard": "tensorboard",
+    "open3d": "open3d",
+    "trimesh": "trimesh",
+    "imageio": "imageio",
+    "omegaconf": "omegaconf",
+    "einops": "einops",
+    "h5py": "h5py"
+  },
+  "git_sources": {
+    "fused_ssim": "https://github.com/rahul-goel/fused-ssim",
+    "plas": "https://github.com/fraunhoferhhi/PLAS"
+  },
+  "signatures": [
+    {
+      "id": "pip-missing-module",
+      "signature": "No module named '([a-zA-Z0-9_.-]+)'",
+      "action": "pip_install",
+      "note": "缺什么装什么；名字经 module_map/git_sources 映射（cv2→opencv-python-headless，fused_ssim→克隆官方仓库编译）"
+    },
+    {
+      "id": "flt-max-undefined",
+      "signature": "identifier \"?FLT_MAX\"? is undefined|FLT_MAX.{0,60}undeclared|error: use of undeclared identifier 'FLT_MAX'",
+      "action": "apply_patch_rule",
+      "rule": "cfloat-cuda12",
+      "scope": "repo",
+      "note": "CUDA 12 编译期报 FLT_MAX 未定义"
+    },
+    {
+      "id": "np-cast-removed",
+      "signature": "module 'numpy' has no attribute 'cast'|np\\.cast",
+      "action": "apply_patch_rule",
+      "rule": "np-cast-numpy2",
+      "scope": "repo",
+      "note": "numpy 2.0 移除 np.cast"
+    },
+    {
+      "id": "scene-not-defined",
+      "signature": "name '(Scene|GaussianModel)' is not defined",
+      "action": "apply_patch_rule",
+      "rule": "future-annotations",
+      "scope": "repo",
+      "note": "注解前向引用崩溃，插入 from __future__ import annotations"
+    },
+    {
+      "id": "torch-weights-only",
+      "signature": "Unsupported global: GLOBAL numpy|Weights only load failed|weights_only.{0,40}failed",
+      "action": "apply_patch_rule",
+      "rule": "torch-load-weights-only",
+      "scope": "traceback",
+      "note": "torch 2.6+ 默认 weights_only=True，对 traceback 涉及文件加 weights_only=False"
+    },
+    {
+      "id": "arange-device-mismatch",
+      "signature": "indices should be either on cpu or on the same device",
+      "action": "apply_patch_rule",
+      "rule": "arange-device",
+      "scope": "traceback",
+      "note": "arange 生成的索引在 CPU，与 GPU 张量不匹配"
+    },
+    {
+      "id": "port-in-use",
+      "signature": "Address already in use",
+      "action": "none",
+      "note": "端口占用补丁已在训练脚本全局应用（端口自动 +1），此处无需动作"
+    },
+    {
+      "id": "compressai-rans-encoder",
+      "signature": "has no attribute '_encoder'",
+      "action": "none",
+      "note": "compressai rans 接口不匹配（RDO 案例）：pip 版 compressai 在此环境不可用，需官方源码版，见设计文档已知限制"
+    }
+  ]
+}

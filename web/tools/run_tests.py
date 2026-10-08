@@ -15,6 +15,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT_DIR))
 
 TEST_MODULES = [
+  "web.tools.test_algorithms_manager",
   "web.tools.test_detached_remote",
   "web.tools.test_flow_data",
   "web.tools.test_flow_reset",
