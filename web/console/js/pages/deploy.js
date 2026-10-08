@@ -36,6 +36,8 @@ const LABELS = {
     capability: "Capability",
     sceneScale: "Scene scale",
     failStages: "Failure stages",
+    adaptation: "Cap adaptation",
+    adaptHint: "loads whose row cap moved up / down at runtime",
     browser: "Browser",
     os: "OS",
     device: "Device",
@@ -84,6 +86,8 @@ const LABELS = {
     capability: "能力等级",
     sceneScale: "场景规模",
     failStages: "失败阶段",
+    adaptation: "上限自适应",
+    adaptHint: "运行中上调过 / 下调过点数上限的加载数",
     browser: "浏览器",
     os: "系统",
     device: "设备",
@@ -162,6 +166,7 @@ export default {
     const profileRows = computed(() => dist(summary.value && summary.value.serving.by_client_profile));
     const capabilityRows = computed(() => dist(summary.value && summary.value.serving.by_capability));
     const scaleRows = computed(() => dist(summary.value && summary.value.serving.by_scene_scale, SCALE_LABELS));
+    const adaptation = computed(() => (summary.value && summary.value.serving.adaptation) || {});
     const browserRows = computed(() => dist(summary.value && summary.value.clients.browser));
     const osRows = computed(() => dist(summary.value && summary.value.clients.os));
     const deviceRows = computed(() => dist(summary.value && summary.value.clients.device));
@@ -211,7 +216,7 @@ export default {
     return {
       store, summary, loading, load, openEvidence, notAdmin, L,
       stageRows, failRows, policyRows, profileRows, capabilityRows, scaleRows,
-      browserRows, osRows, deviceRows, metricRows, http, serving, recentFailures,
+      browserRows, osRows, deviceRows, metricRows, http, serving, recentFailures, adaptation,
       fmtStat, fmtBytes, fmtTime, pctText,
     };
   },
@@ -298,6 +303,16 @@ export default {
             <div class="small muted" style="margin:10px 0 4px">{{ L('sceneScale') }}</div>
             <div v-for="row in scaleRows" :key="'sc' + row.key" class="row" style="justify-content:space-between">
               <span class="small">{{ row.key }}</span><span class="small faint">{{ row.count }}</span>
+            </div>
+            <div class="small muted" style="margin:10px 0 4px">{{ L('adaptation') }}</div>
+            <div class="row" style="justify-content:space-between">
+              <span class="small">&uarr; {{ L('adaptHint') }}</span><span class="small faint">{{ adaptation.loads_adapted_up ?? 0 }}</span>
+            </div>
+            <div class="row" style="justify-content:space-between">
+              <span class="small">&darr; {{ L('adaptHint') }}</span><span class="small faint">{{ adaptation.loads_adapted_down ?? 0 }}</span>
+            </div>
+            <div class="row" style="justify-content:space-between">
+              <span class="small">cap p50</span><span class="small faint">{{ adaptation.cap_initial && adaptation.cap_initial.count ? adaptation.cap_initial.p50 + ' &rarr; ' + adaptation.cap_final.p50 : '&ndash;' }}</span>
             </div>
             <div class="small muted" style="margin:10px 0 4px">{{ L('capability') }}</div>
             <div v-for="row in capabilityRows" :key="'ca' + row.key" class="row" style="justify-content:space-between">

@@ -39,6 +39,10 @@ def build_markdown(summary: dict) -> str:
     f"- P95 frame time ms: {fmt_stat(serving.get('p95_frame_ms', {}))}",
     f"- FPS: {fmt_stat(serving.get('fps', {}))}",
     f"- Bytes per load: {fmt_stat(serving.get('bytes', {}))}",
+    f"- Adaptation: up={serving.get('adaptation', {}).get('loads_adapted_up', 0)} loads, "
+    f"down={serving.get('adaptation', {}).get('loads_adapted_down', 0)} loads, "
+    f"cap p50 {serving.get('adaptation', {}).get('cap_initial', {}).get('p50', 'n/a')} -> "
+    f"{serving.get('adaptation', {}).get('cap_final', {}).get('p50', 'n/a')} rows",
     f"- Policy counts: {json.dumps(serving.get('by_policy', {}), ensure_ascii=False)}",
     f"- Client profile counts: {json.dumps(serving.get('by_client_profile', {}), ensure_ascii=False)}",
     f"- Capability counts: {json.dumps(serving.get('by_capability', {}), ensure_ascii=False)}",

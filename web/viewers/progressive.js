@@ -29,8 +29,12 @@ const params = new URLSearchParams(location.search);
 const POLICY = (params.get("policy") || "joint").toLowerCase();
 const PROFILE_PARAM = (params.get("profile") || "auto").toLowerCase();
 const BENCHMARK_MODE = params.get("benchmark") === "1";
+// Runtime adaptation: raise the row cap while measured fps has headroom,
+// lower it under sustained pressure. adapt=0 pins the initial tier cap.
+const ADAPT_ENABLED = params.get("adapt") !== "0";
 let MAX_ROWS = Number(params.get("maxRows") || 0);
 if (!Number.isFinite(MAX_ROWS) || MAX_ROWS <= 0) MAX_ROWS = Infinity; // reject negative/NaN caps
+const USER_MAX_ROWS = Number.isFinite(MAX_ROWS); // an explicit ?maxRows is a hard cap adaptation may not touch
 
 const VALID = new Set(["naive", "bandwidth", "viewport", "gpu", "joint", "full"]);
 if (!VALID.has(POLICY)) {
@@ -331,34 +335,88 @@ const telemetry = {
 };
 window.__webgsTelemetry = () => JSON.parse(JSON.stringify(telemetry));
 
+const PROFILES = {
+    desktop_discrete_gpu: { rowCap: 3000000, targetFps: 60 },
+    laptop_integrated_gpu: { rowCap: 1200000, targetFps: 45 },
+    android_mid_range: { rowCap: 500000, targetFps: 30 },
+};
+// GPU-name buckets for the renderer string from WEBGL_debug_renderer_info.
+// Local-only signal: the raw string is never uploaded, only the tier id.
+// "apple" covers both Safari's "Apple GPU" and Chrome's "ANGLE Metal
+// Renderer: Apple M5" — every Apple GPU handles the desktop tier.
+const DISCRETE_GPU_RE = /nvidia|geforce|quadro|radeon rx|radeon\(pro\)|intel.*arc|apple/i;
+const INTEGRATED_GPU_RE = /intel|mali|adreno|powervr|radeon\(tm\)|swiftshader|llvmpipe|mesa/i;
+
+// Adaptation bookkeeping, module scope because the load beacon reports it.
+const adapt = {
+    enabled: ADAPT_ENABLED,
+    capInitial: null,
+    capCurrent: null,
+    upSteps: 0,
+    downSteps: 0,
+    fastWindows: 0,
+    slowWindows: 0,
+    lastChangeAt: 0,
+};
+
 function detectClientProfile() {
     const ua = navigator.userAgent || "";
     const signals = {
         deviceMemoryGb: Number(navigator.deviceMemory || 0) || null,
         cores: Number(navigator.hardwareConcurrency || 0) || null,
         touch: navigator.maxTouchPoints > 0,
-        mobileUa: /Android|iPhone|iPad|Mobile/i.test(ua),
-    };
-    const profiles = {
-        desktop_discrete_gpu: { rowCap: 3000000, targetFps: 60 },
-        laptop_integrated_gpu: { rowCap: 1200000, targetFps: 45 },
-        android_mid_range: { rowCap: 500000, targetFps: 30 },
+        // iPadOS reports "Macintosh" + touch points, not an iPad UA.
+        mobileUa: /Android|iPhone|iPad|Mobile/i.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua)),
+        gpu: null,
     };
     let id = "desktop_discrete_gpu";
     if (PROFILE_PARAM && PROFILE_PARAM !== "auto") {
-        id = profiles[PROFILE_PARAM] ? PROFILE_PARAM : "desktop_discrete_gpu";
+        id = PROFILES[PROFILE_PARAM] ? PROFILE_PARAM : "desktop_discrete_gpu";
     } else if (signals.mobileUa || (signals.deviceMemoryGb && signals.deviceMemoryGb <= 4)) {
         id = "android_mid_range";
     } else if (signals.deviceMemoryGb && signals.deviceMemoryGb < 8) {
         // deviceMemory is capped at 8 by spec ("at least 8 GB"), so an 8 must
         // not demote a desktop machine to the integrated-GPU profile.
         id = "laptop_integrated_gpu";
+    } else if (signals.cores && signals.cores <= 4) {
+        // Few cores with no memory signal at all (Firefox/Safari): stay
+        // conservative rather than assuming a discrete GPU.
+        id = "laptop_integrated_gpu";
     }
-    const selected = profiles[id] || profiles.desktop_discrete_gpu;
-    const rowCap = selected.rowCap;
-    const targetFps = selected.targetFps;
-    if (!Number.isFinite(MAX_ROWS)) MAX_ROWS = rowCap;
-    return { id, rowCap: MAX_ROWS, targetFps, signals };
+    return applyProfile(id, signals);
+}
+
+// Refine the initial guess once the WebGL renderer string is known. This
+// fixes the classic misses: Intel-core Macs report "Intel Iris ..." (down to
+// laptop tier), Apple silicon reports "Apple GPU" (stays desktop).
+function refineClientProfileWithGpu(renderer) {
+    const profile = telemetry.clientProfile;
+    if (!profile || !renderer || (PROFILE_PARAM && PROFILE_PARAM !== "auto")) return;
+    const gpu = String(renderer).slice(0, 80);
+    profile.signals.gpu = gpu;
+    if (DISCRETE_GPU_RE.test(gpu)) {
+        if (profile.id === "laptop_integrated_gpu") applyProfile("desktop_discrete_gpu", profile.signals);
+    } else if (INTEGRATED_GPU_RE.test(gpu) && !profile.signals.mobileUa) {
+        if (profile.id === "desktop_discrete_gpu") applyProfile("laptop_integrated_gpu", profile.signals);
+    }
+}
+
+function applyProfile(id, signals) {
+    const next = PROFILES[id] || PROFILES.desktop_discrete_gpu;
+    if (!telemetry.clientProfile) {
+        telemetry.clientProfile = { id, signals, targetFps: next.targetFps, rowCap: next.rowCap };
+    } else {
+        telemetry.clientProfile.id = id;
+        telemetry.clientProfile.targetFps = next.targetFps;
+        telemetry.clientProfile.rowCap = next.rowCap;
+    }
+    if (!USER_MAX_ROWS) {
+        MAX_ROWS = next.rowCap;
+        telemetry.maxRowsCap = MAX_ROWS;
+    }
+    adapt.capInitial = MAX_ROWS;
+    adapt.capCurrent = MAX_ROWS;
+    return telemetry.clientProfile;
 }
 
 function fmtBytes(b) {
@@ -412,6 +470,10 @@ function sendLoadBeacon(extra) {
         chunk_failures: telemetry.chunkFailures,
         p95_frame_ms: p95FrameMs(),
         fps: telemetry.fps > 0 ? telemetry.fps : null,
+        cap_initial: adapt.capInitial,
+        cap_final: Number.isFinite(MAX_ROWS) ? MAX_ROWS : null,
+        adapt_up: adapt.upSteps,
+        adapt_down: adapt.downSteps,
         ...extra,
     };
     try {
@@ -498,8 +560,12 @@ async function main() {
         const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
         if (debugInfo) {
             telemetry.capabilities.renderer = String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) || "unknown").slice(0, 80);
+        } else {
+            // Safari hides the debug extension but may still answer the raw enum.
+            try { telemetry.capabilities.renderer = String(gl.getParameter(0x9245) || "unknown").slice(0, 80); } catch { /* best effort */ }
         }
     } catch { /* keep capability checks best-effort */ }
+    refineClientProfileWithGpu(telemetry.capabilities.renderer);
 
     const compile = (type, source) => {
         const shader = gl.createShader(type);
@@ -778,6 +844,49 @@ async function main() {
         for (const chunk of candidates) startFetch(chunk);
     }
 
+    /* ---------- runtime cap adaptation ---------- */
+
+    // Measured-fps controller around the detected tier's row cap. Raising
+    // unlocks withheld refinement chunks while the device has headroom;
+    // lowering only stops future fetches (resident rows are never dropped).
+    function evaluateAdaptation(now) {
+        const profile = telemetry.clientProfile;
+        if (!profile || !profile.targetFps || USER_MAX_ROWS) return;
+        const times = telemetry.frameTimes;
+        if (times.length < 30) return; // hidden/background tab: too few frames to judge
+        const fps = 1000 / (times.reduce((sum, ms) => sum + ms, 0) / times.length);
+        if (now - adapt.lastChangeAt < 10000) return; // rate limit: one step per 10s
+        const target = profile.targetFps;
+        const capped = telemetry.totalRows >= Math.min(telemetry.sceneRows, MAX_ROWS);
+        const undelivered = chunkState.some((c) => c.status === "pending" || c.status === "fetching");
+
+        adapt.fastWindows = (fps >= target * 1.25 && capped && undelivered) ? adapt.fastWindows + 1 : 0;
+        adapt.slowWindows = (fps <= target * 0.7) ? adapt.slowWindows + 1 : 0;
+
+        if (adapt.fastWindows >= 2) {
+            const raised = Math.min(telemetry.sceneRows, PROFILES.desktop_discrete_gpu.rowCap, Math.ceil(MAX_ROWS * 1.5));
+            if (raised > MAX_ROWS) {
+                MAX_ROWS = raised;
+                telemetry.maxRowsCap = MAX_ROWS;
+                adapt.upSteps += 1;
+                adapt.lastChangeAt = now;
+            }
+            adapt.fastWindows = 0;
+            adapt.slowWindows = 0;
+        } else if (adapt.slowWindows >= 2) {
+            const floorRows = Math.max(200000, Math.ceil((adapt.capInitial || 0) * 0.25));
+            const lowered = Math.max(floorRows, Math.ceil(MAX_ROWS * 0.75));
+            if (lowered < MAX_ROWS) {
+                MAX_ROWS = lowered;
+                telemetry.maxRowsCap = MAX_ROWS;
+                adapt.downSteps += 1;
+                adapt.lastChangeAt = now;
+            }
+            adapt.fastWindows = 0;
+            adapt.slowWindows = 0;
+        }
+    }
+
     async function startFetch(chunk) {
         chunk.status = "fetching";
         queue.add(chunk);
@@ -827,6 +936,7 @@ async function main() {
 
     let framesDone = 0;
     let sampleAccum = 0;
+    let adaptLastEval = 0;
     const frame = (now) => {
         let inv = invert4(viewMatrix);
         if (activeKeys.includes("ArrowLeft")) inv = translate4(inv, -0.03, 0, 0);
@@ -896,6 +1006,10 @@ async function main() {
                 fps: Math.round(fps * 10) / 10,
             });
         }
+        if (ADAPT_ENABLED && now - adaptLastEval >= 5000) {
+            adaptLastEval = now;
+            evaluateAdaptation(now);
+        }
 
         // HUD
         const pct = telemetry.sceneRows ? Math.min(100, (100 * telemetry.totalRows) / telemetry.sceneRows) : 0;
@@ -906,6 +1020,7 @@ async function main() {
         hud.innerHTML =
             `<div><span class="k">policy</span><b>${POLICY}</b></div>` +
             `<div><span class="k">profile</span><b>${telemetry.clientProfile ? telemetry.clientProfile.id : "auto"}</b></div>` +
+            `<div><span class="k">cap</span><b>${Number.isFinite(MAX_ROWS) ? MAX_ROWS.toLocaleString("en-US") : "∞"}${(adapt.upSteps || adapt.downSteps) ? ` (↑${adapt.upSteps} ↓${adapt.downSteps})` : ""}</b></div>` +
             `<div><span class="k">time</span><b>${((now - telemetry.startedAt) / 1000).toFixed(1)}s</b></div>` +
             `<div><span class="k">TTFR</span><b>${telemetry.ttfrMs !== null ? telemetry.ttfrMs + " ms" : "…"}</b></div>` +
             `<div><span class="k">vertices</span><b>${vertexCount} / ${telemetry.sceneRows}</b></div>` +

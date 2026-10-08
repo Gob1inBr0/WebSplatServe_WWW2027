@@ -62,6 +62,13 @@ CLIENT_EVENT_FIELDS = {
     "chunk_failures": (int, 0, 1 << 20),
     "p95_frame_ms": (int, 0, 3600 * 1000),
     "fps": (float, 0.0, 10000.0),
+    # Runtime cap adaptation (progressive.js evaluateAdaptation): initial and
+    # final row caps plus the up/down step counters. Numeric only — the GPU
+    # string that informed the initial tier stays on the client.
+    "cap_initial": (int, 0, 1 << 32),
+    "cap_final": (int, 0, 1 << 32),
+    "adapt_up": (int, 0, 1000),
+    "adapt_down": (int, 0, 1000),
     "failed": (bool,),
     # fail_stage is a small closed set so paper tables get stable buckets;
     # fail_detail carries the raw message (truncated) for debugging.
@@ -298,8 +305,18 @@ class TelemetryStore:
       float(e["fps"]) for e in stage_events["complete"]
       if isinstance(e.get("fps"), (int, float)) and not isinstance(e.get("fps"), bool)
     ]
+    cap_initial_values = [
+      int(e["cap_initial"]) for e in stage_events["complete"]
+      if isinstance(e.get("cap_initial"), int) and not isinstance(e.get("cap_initial"), bool)
+    ]
+    cap_final_values = [
+      int(e["cap_final"]) for e in stage_events["complete"]
+      if isinstance(e.get("cap_final"), int) and not isinstance(e.get("cap_final"), bool)
+    ]
     client_ids = {str(e["client_id"]) for e in serving_events if e.get("client_id")}
     failed_loads = len(stage_events["failed"])
+    loads_adapted_up = sum(1 for e in stage_events["complete"] if int(e.get("adapt_up") or 0) > 0)
+    loads_adapted_down = sum(1 for e in stage_events["complete"] if int(e.get("adapt_down") or 0) > 0)
 
     def _scale_bucket(rows) -> str:
       # Scene-size buckets keep scene names out of the telemetry while still
@@ -349,6 +366,12 @@ class TelemetryStore:
         "bytes": _stats(byte_values),
         "p95_frame_ms": _stats(frame_values),
         "fps": _stats(fps_values),
+        "adaptation": {
+          "loads_adapted_up": loads_adapted_up,
+          "loads_adapted_down": loads_adapted_down,
+          "cap_initial": _stats(cap_initial_values),
+          "cap_final": _stats(cap_final_values),
+        },
         "by_policy": dict(sorted(policy_counts.items())),
         "by_client_profile": dict(sorted(profile_counts.items())),
         "by_capability": dict(sorted(capability_counts.items())),

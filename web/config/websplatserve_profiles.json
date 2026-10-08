@@ -44,5 +44,17 @@
     "t90_view_ms"
   ],
   "metric_notes": "ttfr_ms/load_ms/bytes/fps/p95_frame_ms/failure_rate/failure_stages come from deployed browser telemetry (/api/telemetry/summary); t50_view_ms/t90_view_ms/chunk_arrival_time/memory_budget_rows come from the policy simulator (run_serving_benchmark.py).",
-  "failure_stages": ["manifest", "webgl", "worker", "chunks", "internal"]
+  "failure_stages": ["manifest", "webgl", "worker", "chunks", "internal"],
+  "client_adaptation": {
+    "enabled_by_default": true,
+    "disable_param": "adapt=0",
+    "evaluate_window_seconds": 5,
+    "consecutive_windows_required": 2,
+    "raise_condition": "avg fps >= 1.25 * target_fps while the row cap is binding and chunks remain",
+    "lower_condition": "avg fps <= 0.7 * target_fps",
+    "raise_step": "cap * 1.5, bounded by scene rows and the desktop tier cap",
+    "lower_step": "cap * 0.75, floored at max(200k rows, initial cap * 0.25)",
+    "min_step_interval_seconds": 10,
+    "note": "Lowering stops future chunk fetches only; resident rows are never dropped."
+  }
 }

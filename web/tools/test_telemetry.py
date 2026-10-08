@@ -48,7 +48,8 @@ def test_serving_load_aggregation_and_device_classes() -> None:
         for i, ttfr in enumerate((500, 700, 900)):
             store.record("serving_load", client_id=f"client-{i % 2}", policy="joint", ttfr_ms=ttfr,
                          bytes=1_000_000, p95_frame_ms=20, fps=58.5, chunks_done=9, chunk_failures=0,
-                         scene_rows=250_000)
+                         scene_rows=250_000, cap_initial=500_000, cap_final=750_000 + i * 10_000,
+                         adapt_up=i, adapt_down=0)
         store.record("serving_load", client_id="client-0", policy="naive", ttfr_ms=1500,
                      failed=True, fail_stage="manifest", fail_detail="404 unable to load manifest")
 
@@ -66,6 +67,12 @@ def test_serving_load_aggregation_and_device_classes() -> None:
         # fps stats come from complete-stage events only
         assert serving["fps"]["count"] == 3
         assert serving["fps"]["min"] == 58.5
+        # adaptation: two of the three loads raised their cap at runtime
+        assert serving["adaptation"]["loads_adapted_up"] == 2
+        assert serving["adaptation"]["loads_adapted_down"] == 0
+        assert serving["adaptation"]["cap_initial"]["count"] == 3
+        assert serving["adaptation"]["cap_initial"]["min"] == 500_000
+        assert serving["adaptation"]["cap_final"]["max"] == 770_000
         # failure rate over all serving loads, unique client ids across events
         assert serving["failure_rate"] == 0.25
         assert serving["unique_clients"] == 2
@@ -123,6 +130,10 @@ def test_client_event_sanitization_bounds_fields() -> None:
         "evil_field": "drop me",           # unknown field must be dropped
         "rows": "999",                     # numeric strings are accepted
         "fps": 58.7,
+        "cap_initial": 500_000,
+        "cap_final": "750000",
+        "adapt_up": 2,
+        "adapt_down": 0,
     })
     assert good is not None
     event_type, fields = good
@@ -133,6 +144,9 @@ def test_client_event_sanitization_bounds_fields() -> None:
     assert fields["rows"] == 999
     assert len(fields["fail_stage"]) == 24
     assert len(fields["fail_detail"]) == 200
+    assert fields["cap_initial"] == 500_000
+    assert fields["cap_final"] == 750_000
+    assert fields["adapt_up"] == 2
     assert "evil_field" not in fields
 
     assert sanitize_client_event({"type": "unknown_type"}) is None
