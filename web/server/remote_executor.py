@@ -4153,3 +4153,128 @@ def remote_gpu_probe(
       ) from exc
   finally:
     _close_ssh_resources(client)
+
+
+_GPU_COMPUTE_APPS_COMMAND = (
+  "nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits"
+)
+_GPU_STATE_COMMAND = (
+  "nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader,nounits"
+)
+
+
+def parse_gpu_compute_apps(text: str) -> List[Dict[str, Any]]:
+  """Parse nvidia-smi --query-compute-apps output into [{"pid", "memory_mib"}]."""
+  apps: List[Dict[str, Any]] = []
+  for line in str(text).splitlines():
+    line = line.strip()
+    if not line or "," not in line:
+      continue
+    parts = [part.strip() for part in line.split(",")]
+    if not parts[0].isdigit():
+      continue  # header or "[Not Supported]"
+    entry: Dict[str, Any] = {"pid": int(parts[0]), "memory_mib": None}
+    if len(parts) > 1 and parts[1].replace(".", "", 1).isdigit():
+      entry["memory_mib"] = int(float(parts[1]))
+    apps.append(entry)
+  return apps
+
+
+def parse_gpu_state(text: str) -> List[Dict[str, Any]]:
+  """Parse nvidia-smi --query-gpu output into per-card index/memory/util."""
+  states: List[Dict[str, Any]] = []
+  for line in str(text).splitlines():
+    line = line.strip()
+    if not line or "," not in line:
+      continue
+    parts = [part.strip() for part in line.split(",")]
+    if not parts or not parts[0].isdigit():
+      continue
+    entry: Dict[str, Any] = {"index": int(parts[0]), "memory_used_mib": None, "utilization_percent": None}
+    if len(parts) > 1 and parts[1].isdigit():
+      entry["memory_used_mib"] = int(parts[1])
+    if len(parts) > 2 and parts[2].isdigit():
+      entry["utilization_percent"] = int(parts[2])
+    states.append(entry)
+  return states
+
+
+def remote_gpu_reset(
+  *,
+  remote_config: Dict[str, Any],
+  timeout_seconds: int = 25,
+) -> Dict[str, Any]:
+  """Force-kill every GPU compute process on the server, stop the GPU keeper
+  (watcher included, so workers do not respawn) and clear the platform's
+  leftover tmux sessions. Destructive by design — it also stops other
+  projects' jobs sharing the cards; the console confirms before calling.
+
+  The bracket patterns ("gpu_keeper_worke[r].py") deliberately cannot match
+  their own remote shell: a plain pkill -f kills the shell that carries the
+  pattern in its command line, which drops the SSH session mid-reset.
+  """
+  host = str(remote_config.get("host", "")).strip()
+  if not host:
+    raise RemoteExecutionError(
+      "Remote host is required for the GPU reset.",
+      code_hint="WGSC-GPU-RESET-CONFIG-001",
+      stage="config",
+    )
+  validated = {
+    "host": host,
+    "port": int(remote_config.get("port", 22) or 22),
+    "username": str(remote_config.get("username", "")).strip() or "root",
+    "password": remote_config.get("password", ""),
+    "key_path": str(remote_config.get("key_path", "") or "").strip(),
+  }
+  paramiko = _load_paramiko()
+  client = _new_ssh_client(validated)
+
+  def _run(command: str) -> str:
+    _, stdout, stderr = client.exec_command(command, timeout=timeout_seconds)
+    output = stdout.read().decode("utf-8", "replace")
+    stderr.read()  # drain so the channel can close
+    return output
+
+  try:
+    try:
+      client.connect(
+        hostname=validated["host"],
+        port=validated["port"],
+        username=validated["username"],
+        **_connect_kwargs(validated),
+        timeout=timeout_seconds,
+      )
+      before = parse_gpu_compute_apps(_run(_GPU_COMPUTE_APPS_COMMAND))
+      pids = [str(app["pid"]) for app in before]
+      if pids:
+        _run("kill -9 " + " ".join(pids) + " 2>/dev/null; true")
+      # Non-CUDA keeper supervisor plus any worker the compute-app list missed;
+      # each pkill's exit code is echoed (0 = matched something, 1 = none).
+      keeper_codes = _run(
+        'pkill -9 -f "gpu_keeper_worke[r].py" 2>/dev/null; echo $?\n'
+        'pkill -9 -f "keeper_watc[h].sh" 2>/dev/null; echo $?'
+      ).strip().splitlines()
+      _run(
+        'for s in $(tmux ls -F "#S" 2>/dev/null | grep "^wgsc-"); do '
+        'tmux kill-session -t "$s" 2>/dev/null; done; true'
+      )
+      sessions_line = _run('tmux ls 2>/dev/null | grep -c "^wgsc-"; echo 0').strip().splitlines()
+      _run("sleep 2; true")
+      return {
+        "host": host,
+        "killed_processes": before,
+        "killed_count": len(before),
+        "keeper_patterns_matched": sum(1 for code in keeper_codes if code.strip() == "0"),
+        "wgsc_sessions_left": int(sessions_line[0] if sessions_line and sessions_line[0].isdigit() else 0),
+        "gpus_after": parse_gpu_state(_run(_GPU_STATE_COMMAND)),
+        "compute_apps_after": len(parse_gpu_compute_apps(_run(_GPU_COMPUTE_APPS_COMMAND))),
+      }
+    except paramiko.AuthenticationException as exc:
+      raise RemoteExecutionError(
+        "SSH authentication failed. Check remote username/password.",
+        code_hint="WGSC-GPU-RESET-AUTH-001",
+        stage="connect",
+      ) from exc
+  finally:
+    _close_ssh_resources(client)

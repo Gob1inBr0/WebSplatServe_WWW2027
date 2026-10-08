@@ -3,7 +3,7 @@
 
 import { store, persistProfiles, persistPrefs, defaultProfile, activeProfile, sessionPasswords, toast, navigate, deriveDataPaths } from "../store.js";
 import { parseSshCommand } from "../ssh-parse.js";
-import { getSshConfigHosts, probeRemoteDisk } from "../api.js";
+import { getSshConfigHosts, probeRemoteDisk, resetRemoteGpu } from "../api.js";
 import { t } from "../i18n.js";
 
 const { ref, computed } = Vue;
@@ -16,6 +16,7 @@ export default {
     const passwordInput = ref("");
     const passwordVersion = ref(0);  // sessionStorage is not reactive; bump to re-evaluate
     const notifySupported = typeof Notification !== "undefined";
+    const notifyGranted = notifySupported && Notification.permission === "granted";
 
     const active = computed(() => activeProfile());
     const hasPassword = computed(() => {
@@ -171,6 +172,48 @@ export default {
       }
     }
 
+    /* Force-kill every GPU compute process on the active server (keeper
+       included) and clear leftover tmux sessions. Destructive on purpose —
+       it also stops other projects' jobs sharing the cards. */
+    const resettingGpu = ref(false);
+    const gpuResetReport = ref(null);
+    const gpuResetSummary = computed(() => {
+      const gpus = gpuResetReport.value && gpuResetReport.value.gpus_after;
+      if (!Array.isArray(gpus) || !gpus.length) return "";
+      return gpus
+        .map((g) => "#" + g.index + " " + (g.memory_used_mib ?? "?") + "MiB/" + (g.utilization_percent ?? "?") + "%")
+        .join(" · ");
+    });
+    async function resetGpu() {
+      const profile = active.value;
+      if (!profile || !profile.host.trim()) {
+        toast(t("set.resetNeedProfile"), "error");
+        return;
+      }
+      if (!sessionPasswords.get(profile.id) && !String(profile.key_path || "").trim()) {
+        toast(t("set.resetNeedAuth"), "error");
+        return;
+      }
+      if (!window.confirm(t("set.resetConfirm"))) return;
+      resettingGpu.value = true;
+      gpuResetReport.value = null;
+      try {
+        const data = await resetRemoteGpu({
+          host: profile.host,
+          port: Number(profile.port) || 22,
+          username: profile.username,
+          password: sessionPasswords.get(profile.id),
+          key_path: String(profile.key_path || "").trim(),
+        });
+        gpuResetReport.value = data.reset || {};
+        toast(t("set.resetDone"), "success", 8000);
+      } catch (err) {
+        toast(`${t("set.resetFailed")} ${err.message}`, "error", 9000);
+      } finally {
+        resettingGpu.value = false;
+      }
+    }
+
     function savePassword() {
       if (!active.value) { toast(t("set.needProfileFirst"), "error"); return; }
       sessionPasswords.set(active.value.id, passwordInput.value);
@@ -196,6 +239,7 @@ export default {
       savePassword, askNotifyPermission, persistPrefs, navigate,
       sshHosts, sshHostsLoading, sshHostsLoaded, pickedSshHost, loadSshHosts, applySshHost,
       onUsernameInput, pathWarnings, probingDisk, diskProbe, probeDataDisk,
+      resettingGpu, gpuResetReport, gpuResetSummary, resetGpu,
     };
   },
   template: `
@@ -298,6 +342,24 @@ export default {
       </ui-card>
 
       <!-- password for active profile -->
+      <!-- server training reset -->
+      <ui-card :title="$t('set.resetTitle')" style="margin-bottom:20px;border-color:var(--warn,#e6b450)">
+        <div class="card-body" style="padding-top:2px">
+          <p class="small muted" style="margin-bottom:10px">{{ $t("set.resetDesc") }}</p>
+          <div class="row" style="gap:8px;margin-bottom:10px">
+            <ui-button size="sm" icon="rotate" :disabled="resettingGpu || !active"
+                       @click="resetGpu">{{ resettingGpu ? $t("set.resetWorking") : $t("set.resetButton") }}</ui-button>
+            <span v-if="active" class="small muted">{{ active.label || active.host }}</span>
+          </div>
+          <div v-if="gpuResetReport" class="small mono">
+            <div>{{ $t("set.resetKilled") }}: {{ gpuResetReport.killed_count }}</div>
+            <div>{{ $t("set.resetKeeper") }}: {{ gpuResetReport.keeper_patterns_matched }}</div>
+            <div>{{ $t("set.resetSessions") }}: {{ gpuResetReport.wgsc_sessions_left }}</div>
+            <div v-if="gpuResetSummary">GPU: {{ gpuResetSummary }}</div>
+          </div>
+        </div>
+      </ui-card>
+
       <ui-card :title="$t('set.password')" style="margin-bottom:20px">
         <p class="small muted" style="margin-bottom:12px">
           {{ $t("set.passwordFor") }} <strong>{{ active ? (active.label || active.host) : "—" }}</strong>.
@@ -327,7 +389,7 @@ export default {
             <ui-badge kind="neutral">{{ $t("set.notSupported") }}</ui-badge>
           </template>
           <template v-else>
-            <ui-button v-if="Notification.permission !== 'granted'" size="sm" icon="bell" @click="askNotifyPermission">{{ $t("set.enable") }}</ui-button>
+            <ui-button v-if="notifySupported && !notifyGranted" size="sm" icon="bell" @click="askNotifyPermission">{{ $t("set.enable") }}</ui-button>
             <label v-else class="checkbox-row">
               <input type="checkbox" v-model="store.prefs.notifyOnDone" @change="persistPrefs" />
               {{ store.prefs.notifyOnDone ? $t("set.on") : $t("set.off") }}

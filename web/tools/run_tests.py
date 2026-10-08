@@ -23,6 +23,7 @@ TEST_MODULES = [
   "web.tools.test_job_cleanup",
   "web.tools.test_ply_quick_load",
   "web.tools.test_remote_disk_probe",
+  "web.tools.test_remote_gpu_reset",
   "web.tools.test_scaffold_decode",
   "web.tools.test_ssh_config_import",
   "web.tools.test_telemetry",

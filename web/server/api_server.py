@@ -69,6 +69,7 @@ from web.server.remote_executor import (
   download_remote_output_directory,
   poll_remote_detached_job,
   remote_disk_probe,
+  remote_gpu_reset,
   remote_list_datasets,
   remote_preflight_check,
   repair_remote_job_metrics,
@@ -1503,12 +1504,14 @@ def _training_format_args(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def extract_remote_config_input(payload: Dict[str, Any]) -> Dict[str, Any]:
   remote_payload = payload.get("remote", {}) if isinstance(payload.get("remote"), dict) else {}
+  # Flat fallbacks last: the settings console sends bare {host, port, ...}
+  # for its remote operations (disk probe, GPU reset).
   return {
-    "host": remote_payload.get("host", payload.get("remote_host", "")),
-    "port": remote_payload.get("port", payload.get("remote_port", 22)),
-    "username": remote_payload.get("username", payload.get("remote_username", "")),
-    "password": remote_payload.get("password", payload.get("remote_password", "")),
-    "key_path": remote_payload.get("key_path", payload.get("remote_key_path", "")),
+    "host": remote_payload.get("host", payload.get("remote_host", payload.get("host", ""))),
+    "port": remote_payload.get("port", payload.get("remote_port", payload.get("port", 22))),
+    "username": remote_payload.get("username", payload.get("remote_username", payload.get("username", ""))),
+    "password": remote_payload.get("password", payload.get("remote_password", payload.get("password", ""))),
+    "key_path": remote_payload.get("key_path", payload.get("remote_key_path", payload.get("key_path", ""))),
     "repo_path": remote_payload.get("repo_path", payload.get("remote_repo_path", "")),
     "workspace_root": remote_payload.get("workspace_root", payload.get("remote_workspace_root", "")),
     "output_root": remote_payload.get("output_root", payload.get("remote_output_root", "")),
@@ -2919,6 +2922,45 @@ class ApiHandler(SimpleHTTPRequestHandler):
         )
         return
       json_response(self, {"ok": True, "disk": report})
+      return
+
+    if parsed.path == "/api/remote/gpu-reset":
+      # Operator action from Settings: force-kill every GPU compute process on
+      # the server (the GPU keeper included, watcher first so workers do not
+      # respawn), clear the platform's leftover tmux sessions, then mark this
+      # server's in-flight jobs failed. Destructive by design — it also stops
+      # other projects' jobs sharing the cards; the console confirms first.
+      try:
+        remote_config_input = extract_remote_config_input(payload)
+        reset_host = str(remote_config_input.get("host", "")).strip()
+        report = remote_gpu_reset(
+          remote_config=remote_config_input,
+          timeout_seconds=int(payload.get("timeout_seconds", 25) or 25),
+        )
+      except RemoteExecutionError as exc:
+        error_response(
+          self,
+          code=exc.code_hint or "WGSC-GPU-RESET-001",
+          step="gpu_reset",
+          message=str(exc),
+          reason=f"stage={exc.stage or 'unknown'}",
+          status=400,
+        )
+        return
+      marked = 0
+      for job in JOBS.values():
+        if str(job.get("status", "")).lower() not in ("running", "queued", "launching", "detached", "pending"):
+          continue
+        job_remote = job.get("remote") if isinstance(job.get("remote"), dict) else {}
+        job_host = str(job_remote.get("host", "")).strip()
+        if reset_host and job_host and job_host != reset_host:
+          continue
+        job["status"] = "failed"
+        job["failure_reason"] = "Server GPUs were force-reset from Settings (operator action)."
+        job["finished_at"] = time.time()
+        persist_job_state(job)
+        marked += 1
+      json_response(self, {"ok": True, "reset": report, "jobs_marked_failed": marked})
       return
 
     if parsed.path == "/api/remote-check":

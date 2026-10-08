@@ -80,6 +80,8 @@ export const getInstallJob = (id) => request(`/api/algorithms/install/${encodeUR
 export const getSshConfigHosts = () => request("/api/ssh-config/hosts", { timeoutMs: 8000 });
 export const listRemoteDatasets = (remote) =>
   request("/api/remote-datasets", { method: "POST", body: { remote }, timeoutMs: 60000 });
+export const resetRemoteGpu = (remote) =>
+  request("/api/remote/gpu-reset", { method: "POST", body: remote, timeoutMs: 60000 });
 export const probeRemoteDisk = (remote) =>
   request("/api/remote-disk-probe", { method: "POST", body: { remote }, timeoutMs: 45000 });
 export const environmentCheck = (family) =>
