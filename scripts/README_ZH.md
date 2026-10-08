@@ -58,3 +58,8 @@ bash scripts/10_smoke_local_pipeline.sh
 - 如果已经有标准的 SH PLY，直接从 `04_export_scene.ps1` 开始。
 - 浏览器 QoE 基准测试不做图像质量评估。
 - `10_smoke_local_pipeline.ps1` 会在临时目录（`%TEMP%`）下生成一个合成的 SH PLY，在那里导出资源，并运行调度器/基准脚本，不需要真实场景，也不需要 `web/generated` 的写权限。
+- 开发者实例（部署数据页和遥测证据接口只在这里开放，其他实例返回 404）：单独用另一个端口启动，建议只绑本机回环：
+
+  ```bash
+  python web/server/api_server.py --host 127.0.0.1 --port 8092 --admin   # PowerShell 版支持相同参数
+  ```

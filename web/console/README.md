@@ -21,6 +21,10 @@ training workflow. Served by the same server as the legacy UI:
 - **Datasets** — every run grouped by its dataset with a side-by-side compare
   view (render images + metric deltas against the best pick).
 - **3D viewer** — built-in demo scenes plus quick load of local PLYs.
+- **Deployment Data** (`#/deploy`) — developer-only page served by the
+  `--admin` server instance: TTFR/FPS/bytes/failure aggregates from the
+  anonymous telemetry, plus a one-click `evidence.md` download. Hidden on
+  user-facing instances (the endpoints answer 404 there).
 - **English / 中文** — toggle in the top bar; the choice is remembered.
 
 ## Progressive serving (WebGS, WWW Industry Track plan)
@@ -37,11 +41,20 @@ pipeline described in the WebGS optimization plan:
   adaptively and are appended into the WebGPU pipeline incrementally.
 - **Adapt** — six policies are built in for the paper's baselines:
   `joint | bandwidth | viewport | gpu | naive | full` (the URL parameter
-  `&policy=` switches them). The HUD shows TTFR, downloaded bytes,
-  bandwidth estimate, FPS and P95 frame time.
+  `&policy=` switches them). The client classifies the device (mobile UA,
+  local GPU renderer keywords, device memory, core count) into three tiers
+  and adapts the row cap at runtime: two consecutive 5 s windows at
+  >= 1.25x the tier's target fps with the cap binding raise it 1.5x, two
+  windows at <= 0.7x lower it 0.75x. `profile=` forces a tier, `maxRows=`
+  is a hard experimental cap, `adapt=0` pins the cap. The HUD shows TTFR,
+  the live cap with up/down counters, downloaded bytes, bandwidth
+  estimate, FPS and P95 frame time.
 - **Telemetry** — `window.__webgsTelemetry()` inside the progressive viewer
   returns the full trace (TTFR, per-chunk arrivals, bytes/rows-over-time,
-  frame times) for the evaluation harness.
+  frame times) for the evaluation harness. Every load also POSTs one
+  anonymous `serving_load` beacon to `/api/telemetry/event` (first frame,
+  completion, failure) with numeric fields only: TTFR, bytes, fps, P95
+  frame time, cap adaptation counters and a closed failure-stage enum.
 
 v1 limitation: the chunk format covers SH (standard 3DGS training) PLYs;
 non-SH representations are a documented P2 item.
@@ -58,7 +71,7 @@ js/api.js          typed wrappers around the backend /api endpoints
 js/i18n.js         en/zh dictionary (t() reads the store, so switches are live)
 js/ssh-parse.js    parses pasted SSH commands
 js/components/     UI kit + SVG line chart
-js/pages/          dashboard, wizard, runs, datasets, algorithms, viewer, settings
+js/pages/          dashboard, wizard, runs, datasets, algorithms, viewer, deploy, settings
 ```
 
 The server injects the API access token into this page automatically; CLI

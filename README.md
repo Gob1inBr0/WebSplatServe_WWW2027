@@ -148,6 +148,26 @@ Available viewer policies:
 naive, bandwidth, viewport, gpu, joint, full
 ```
 
+### Client profile and runtime adaptation
+
+The viewer classifies the device before loading and adapts while playing:
+
+- Detection order: forced URL value, then mobile/tablet UA (iPadOS included),
+  then the local WebGL renderer string (discrete vs integrated keyword
+  buckets — the raw string never leaves the browser), then device memory /
+  CPU core counts. Tiers: `desktop_discrete_gpu` (3M rows, 60 fps),
+  `laptop_integrated_gpu` (1.2M rows, 45 fps), `android_mid_range`
+  (0.5M rows, 30 fps).
+- Runtime adaptation (default on): every 5 s the viewer compares average fps
+  to the tier target. Two consecutive windows at >= 1.25x target with the row
+  cap binding raise the cap 1.5x; two windows at <= 0.7x lower it 0.75x. At
+  most one step per 10 s; lowering only stops future chunk fetches.
+- URL parameters: `profile=auto|<tier>` forces a tier, `maxRows=<n>` is a
+  hard cap that adaptation never touches, `adapt=0` pins the tier cap for
+  controlled experiments.
+- The HUD shows policy, profile, the live row cap with up/down step counters,
+  TTFR, resident vertices, downloaded bytes, bandwidth estimate and FPS/P95.
+
 ## Test
 
 Run only the new scheduler tests:
@@ -192,16 +212,29 @@ This browser harness records TTFR, bytes, resident rows, chunk arrivals, FPS/P95
 
 ## Deployment Evidence
 
-The inherited server already records anonymous telemetry under `web/generated/telemetry/` and exposes `/api/telemetry/summary`.  Save that JSON and convert it into a paper note:
+Anonymous telemetry is recorded to daily JSONL files under `web/generated/telemetry/` (never statically downloadable). Each scene load reports one `serving_load` beacon at first frame, at completion and on failure, carrying TTFR, bytes, fps, P95 frame time, the client tier, the runtime cap adaptation counters (`cap_initial` / `cap_final` / `adapt_up` / `adapt_down`) and a closed failure-stage enum (`manifest | webgl | worker | chunks | internal`) with the truncated raw message.
+
+Deployment evidence is developer-only. Serve it from a separate admin instance; on user-facing instances the endpoints answer 404 and the console hides the page:
+
+```bash
+# user-facing instance (no deployment data page)
+python web/server/api_server.py --host 0.0.0.0 --port 8080
+
+# developer admin instance (bind to loopback, or reach it via an SSH tunnel)
+python web/server/api_server.py --host 127.0.0.1 --port 8092 --admin
+```
+
+On the admin instance the console has a **Deployment Data** page (`#/deploy`) with load counts, failure rate, unique clients, TTFR/FPS/P95/bytes tables, policy / profile / scene-scale distributions and a one-click `evidence.md` download. Programmatically:
+
+```text
+GET /api/telemetry/summary      # aggregate JSON (admin instances only)
+GET /api/telemetry/evidence.md  # paper-ready markdown (admin instances only)
+```
+
+Offline conversion from a saved summary:
 
 ```bash
 python web/tools/collect_deployment_evidence.py telemetry_summary.json --out deployment_evidence.md
 ```
 
-Or use the authenticated server endpoint:
-
-```text
-GET /api/telemetry/evidence.md
-```
-
-The telemetry policy remains privacy-preserving: no IP addresses, raw user-agent strings, raw scene names or user content.
+The telemetry policy remains privacy-preserving: no IP addresses, raw user-agent strings, raw GPU strings, raw scene names or user content.

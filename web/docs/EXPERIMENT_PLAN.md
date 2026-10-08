@@ -23,6 +23,11 @@ WebSplatServe evaluates Web-native 3D Gaussian serving instead of only offline c
 - Chunk arrival curve: rows and bytes resident in the browser over wall-clock time.
 - FPS / P95 frame time: collected from the progressive viewer telemetry.
 - Memory: resident Gaussian row budget and device class.
+- Failure rate and failure stages: closed enum (`manifest | webgl | worker |
+  chunks | internal`) aggregated by the deployment telemetry.
+- Cap adaptation: how often the runtime controller raised / lowered the row
+  cap (`adapt_up` / `adapt_down` / `cap_initial` / `cap_final` per load) —
+  evidence that the client actually adapts its budget.
 - Failures: chunk failures, unsupported browser/GPU, OOM or render failures.
 
 ## Minimum Matrix
@@ -34,6 +39,12 @@ Run each policy on at least:
 - Three scene sizes: small, medium and large Gaussian counts.
 
 The repository includes `web/config/websplatserve_profiles.json` so this matrix stays explicit and reproducible.
+
+For real-browser runs the client class is forced on the viewer URL
+(`profile=android_mid_range`, `profile=laptop_integrated_gpu`,
+`profile=desktop_discrete_gpu`), the row budget is pinned with `maxRows=<n>`,
+and `adapt=0` disables the runtime cap controller for the fixed-budget arms.
+The adaptive arms run with defaults (`profile=auto&adapt=1`).
 
 ## Commands
 
@@ -53,10 +64,11 @@ The page runs the selected policies in a same-origin iframe and exports TTFR, do
 
 ## Deployment Evidence
 
-During a public or internal deployment, keep anonymous telemetry enabled.  Pull `/api/telemetry/summary`, save it as JSON, then generate a paper-ready note:
+During a public or internal deployment, keep anonymous telemetry enabled.  The summary and evidence endpoints exist only on the `--admin` server instance (run it on a separate, loopback-bound port); user-facing instances answer 404.  Pull `/api/telemetry/summary` from the admin instance, save it as JSON, then generate a paper-ready note — or just click the download button on the console's Deployment Data page:
 
 ```bash
+python web/server/api_server.py --host 127.0.0.1 --port 8092 --admin
 python web/tools/collect_deployment_evidence.py telemetry_summary.json --out deployment_evidence.md
 ```
 
-Do not store IP addresses, raw user-agent strings, raw scene names or user content in the paper artifact.
+Do not store IP addresses, raw user-agent strings, raw GPU strings, raw scene names or user content in the paper artifact.

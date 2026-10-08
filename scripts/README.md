@@ -58,3 +58,8 @@ Notes:
 - If you already have a standard SH PLY, start at `04_export_scene.ps1`.
 - Browser QoE benchmark does not run image-quality evaluation.
 - `10_smoke_local_pipeline.ps1` generates a synthetic SH PLY under `%TEMP%`, exports assets there, and runs scheduler/benchmark scripts without requiring a real scene or write access to `web/generated`.
+- Developer admin instance (deployment-data page + telemetry evidence endpoints, 404 elsewhere): start it separately on another port, ideally loopback-only:
+
+  ```bash
+  python web/server/api_server.py --host 127.0.0.1 --port 8092 --admin   # or .ps1 with the same flags
+  ```

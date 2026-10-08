@@ -73,6 +73,17 @@ Open:
 http://127.0.0.1:8080/web/console/
 ```
 
+Optional developer admin instance (deployment-data page and telemetry
+summary/evidence endpoints live here only; user-facing instances 404 them):
+
+```bash
+python web/server/api_server.py --host 127.0.0.1 --port 8092 --admin
+```
+
+```text
+http://127.0.0.1:8092/web/console/#/deploy
+```
+
 ## 4. Run Viewer And Browser QoE Benchmark
 
 Single viewer:
@@ -81,6 +92,9 @@ Single viewer:
 http://127.0.0.1:8080/web/viewers/progressive.html?url=/web/generated/websplatserve/scene_a/manifest.json&policy=joint&profile=auto
 ```
 
+Viewer URL parameters: `policy=` (six baselines), `profile=` (`auto` or a
+forced tier), `maxRows=` (hard row cap), `adapt=0` (pin the cap). The HUD
+shows the live cap with up/down step counters.
 Browser QoE benchmark:
 
 ```text
@@ -91,12 +105,14 @@ The browser benchmark records TTFR, downloaded bytes, resident rows, chunk arriv
 
 ## 5. Export Deployment Evidence
 
-Authenticated endpoint:
+On the admin instance (authenticated; 404 on user-facing instances):
 
 ```text
 GET /api/telemetry/evidence.md
 ```
 
+Or open `http://127.0.0.1:8092/web/console/#/deploy` and use the download
+button.
 Offline from a saved telemetry summary:
 
 ```bash

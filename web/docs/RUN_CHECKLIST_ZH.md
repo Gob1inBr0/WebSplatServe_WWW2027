@@ -73,6 +73,16 @@ python web/server/api_server.py --host 127.0.0.1 --port 8080
 http://127.0.0.1:8080/web/console/
 ```
 
+可选的开发者实例（部署数据页和遥测汇总/证据接口只在这里开放，普通实例返回 404）：
+
+```bash
+python web/server/api_server.py --host 127.0.0.1 --port 8092 --admin
+```
+
+```text
+http://127.0.0.1:8092/web/console/#/deploy
+```
+
 ## 4. 运行查看器与浏览器 QoE 基准
 
 单个查看器：
@@ -81,6 +91,7 @@ http://127.0.0.1:8080/web/console/
 http://127.0.0.1:8080/web/viewers/progressive.html?url=/web/generated/websplatserve/scene_a/manifest.json&policy=joint&profile=auto
 ```
 
+查看器 URL 参数：`policy=`（六种基线）、`profile=`（`auto` 或强制档位）、`maxRows=`（硬性行数上限）、`adapt=0`（钉死上限）。HUD 实时显示当前上限和升降次数。
 浏览器 QoE 基准：
 
 ```text
@@ -91,12 +102,13 @@ http://127.0.0.1:8080/web/viewers/benchmark.html?url=/web/generated/websplatserv
 
 ## 5. 导出部署证据
 
-带鉴权的接口：
+开发者实例上带鉴权的接口（普通实例返回 404）：
 
 ```text
 GET /api/telemetry/evidence.md
 ```
 
+也可以打开 `http://127.0.0.1:8092/web/console/#/deploy` 直接点下载按钮。
 离线方式，基于已保存的遥测汇总：
 
 ```bash
