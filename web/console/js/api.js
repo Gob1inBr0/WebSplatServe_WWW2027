@@ -93,6 +93,8 @@ export function jobMetricsCsvUrl(id) {
 
 export const cancelJob = (id, remote) =>
   request(`/api/jobs/${id}/cancel`, { method: "POST", body: { remote: remote || {} }, timeoutMs: 60000 });
+export const decodeAnchorPly = (id, remote) =>
+  request(`/api/jobs/${id}/decode-anchor-ply`, { method: "POST", body: { remote: remote || {} }, timeoutMs: 60000 });
 export const deleteJob = (id) =>
   request(`/api/jobs/${id}/delete`, { method: "POST", body: {} });
 export const clearJobs = (statuses) =>

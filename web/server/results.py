@@ -900,8 +900,12 @@ def direct_ply_candidates(directory: Path, names: list[str] | None = None) -> li
 def result_ply_candidate_score(path: Path) -> int:
   render_format = classify_ply_render_format(path)
   score = 0
-  if render_format in {"gaussian-sh", "gaussian-sg", "anchor-gaussian"}:
+  if render_format in {"gaussian-sh", "gaussian-sg"}:
     score += 1000
+  elif render_format == "anchor-gaussian":
+    # Anchor PLYs (Scaffold-GS) need MLP decoding before the web viewer can
+    # render them; prefer a decoded standard PLY (scene.ply) when a run has both.
+    score += 900
   elif render_format == "rgb-point-cloud":
     score += 100
   else:

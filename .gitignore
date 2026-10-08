@@ -24,3 +24,6 @@ nohup.out
 
 # Paper exports (regenerable)
 deployment_evidence.md
+
+# Local dataset downloads (24 GB+, synced separately, never into git)
+datasets/

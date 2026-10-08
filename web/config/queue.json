@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "max_concurrent_jobs": 0,
+  "min_free_gpu_mb": 8000,
+  "probe_interval_seconds": 20
+}

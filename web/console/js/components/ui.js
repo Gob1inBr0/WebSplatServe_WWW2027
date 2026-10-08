@@ -24,7 +24,13 @@ export function jobStatusMeta(job) {
     training_success_metrics_failed:  { label: t("status.metricsFailed"),  kind: "warning", icon: "alert" },
     training_success_postprocess_failed: { label: t("status.postprocFailed"), kind: "warning", icon: "alert" },
   };
-  return map[status] || { label: status || "-", kind: "neutral", icon: "clock" };
+  const meta = map[status] || { label: status || "-", kind: "neutral", icon: "clock" };
+  // Launch queue: show the FIFO position so users see why nothing moved yet.
+  const position = Number(job?.queue_position);
+  if (status === "queued" && Number.isFinite(position) && position > 0) {
+    return { ...meta, label: `${meta.label} #${position}` };
+  }
+  return meta;
 }
 
 export function formatBytes(bytes) {

@@ -210,6 +210,7 @@ from web.server.jobs import (
   ensure_job_logging,
   ensure_metrics_csv_header,
   flow_temporary_dirs,
+  GPU_GATE,
   is_job_terminal,
   is_remote_download_active,
   is_remote_download_pending,
@@ -242,6 +243,7 @@ from web.server.jobs import (
   start_job_thread,
   start_remote_job_thread,
   start_remote_monitor_thread,
+  start_scaffold_decode_thread,
   unfinished_flow_jobs,
   unique_remote_run_key,
   update_job_artifacts,
@@ -2067,6 +2069,9 @@ class ApiHandler(SimpleHTTPRequestHandler):
       )
       json_response(self, {"jobs": ordered_jobs})
       return
+    if parsed.path == "/api/queue/status":
+      json_response(self, {"ok": True, "queue": GPU_GATE.snapshot()})
+      return
     if parsed.path == "/api/flow/data":
       try:
         result = inspect_flow_data(
@@ -2473,6 +2478,74 @@ class ApiHandler(SimpleHTTPRequestHandler):
         "job": enrich_job(job),
       })
       persist_job_state(job)
+      return
+
+    if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/decode-anchor-ply"):
+      parts = parsed.path.strip("/").split("/")
+      job_id = parts[2] if len(parts) >= 3 else ""
+      job = JOBS.get(job_id)
+      if not job:
+        json_response(self, {"ok": False, "error": f"Unknown job: {job_id}"}, status=404)
+        return
+      family = str(job.get("algorithm_family", "")).strip()
+      if family != "scaffold-gs":
+        error_response(
+          self,
+          code="WGSC-JOB-DECODE-FAMILY",
+          step="job",
+          message=f"Anchor decoding is only wired for scaffold-gs runs (got: {family or 'unknown'}).",
+          status=400,
+          details={"job_id": job_id, "family": family},
+        )
+        return
+      status = str(job.get("status", "")).strip().lower()
+      if status not in {"completed", *PARTIAL_SUCCESS_STATUSES}:
+        error_response(
+          self,
+          code="WGSC-JOB-DECODE-STATUS",
+          step="job",
+          message="Training must finish successfully before anchors can be decoded.",
+          status=400,
+          details={"job_id": job_id, "status": status},
+        )
+        return
+      if str(job.get("decode_state", "")) == "running":
+        json_response(self, {
+          "ok": True,
+          "code": "WGSC-JOB-DECODE-ALREADY-RUNNING",
+          "job": enrich_job(job),
+          "message": "Anchor decoding is already running for this job.",
+        })
+        return
+      if not job.get("remote_detached") or not str(job.get("remote_run_script", "")).strip():
+        error_response(
+          self,
+          code="WGSC-JOB-DECODE-REMOTE",
+          step="job",
+          message="This job has no remote run script recorded; decode must run where the model was trained.",
+          status=400,
+          details={"job_id": job_id},
+        )
+        return
+      remote_config = payload.get("remote") if isinstance(payload.get("remote"), dict) else job.get("_remote_config")
+      if not isinstance(remote_config, dict) or not str(remote_config.get("password", "")).strip():
+        job["monitor_state"] = "needs_remote_config"
+        persist_job_state(job)
+        error_response(
+          self,
+          code="WGSC-JOB-DECODE-REMOTE-CONFIG",
+          step="job",
+          message="Remote credentials are required to run the anchor decoder on the server.",
+          status=400,
+          details={"job_id": job_id},
+        )
+        return
+      start_scaffold_decode_thread(job, remote_config)
+      json_response(self, {
+        "ok": True,
+        "code": "WGSC-JOB-DECODE-STARTED",
+        "job": enrich_job(job),
+      })
       return
 
     if parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/reattach"):

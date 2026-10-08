@@ -26,6 +26,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict
 
 from web.server.adapter_registry import get_adapter, list_adapters
+from web.server.gpu_queue import GpuLaunchGate
 from web.server.remote_executor import (
   RemoteExecutionError,
   build_remote_paths,
@@ -36,6 +37,8 @@ from web.server.remote_executor import (
   check_remote_output_download,
   download_remote_output_directory,
   poll_remote_detached_job,
+  decode_scaffold_anchor_ply,
+  remote_gpu_probe,
   repair_remote_job_metrics,
   sanitize_remote_config,
   start_remote_algorithm_detached,
@@ -89,6 +92,13 @@ REMOTE_MONITOR_MAX_FAILURE_SECONDS = 300
 REMOTE_MONITOR_RETRY_MIN_SECONDS = 3
 REMOTE_MONITOR_RETRY_MAX_SECONDS = 10
 REMOTE_RESULT_IDENTITY_FIELDS = ("host", "port", "username", "output_root")
+
+# FIFO launch gate in front of remote tmux starts: waits for a free GPU slot
+# (concurrency cap + free-memory threshold, see web/config/queue.json).
+GPU_GATE = GpuLaunchGate(
+  occupying_provider=lambda: list(JOBS.values()),
+  probe_fn=remote_gpu_probe,
+)
 
 
 METRICS_CSV_COLUMNS = ["timestamp", "channel", "iter", "loss", "psnr", "ssim", "lpips", "size_mb"]
@@ -255,6 +265,14 @@ def load_persisted_jobs() -> None:
       payload["remote_stage"] = "needs_monitor"
       payload["monitor_state"] = "needs_remote_config"
       payload["safe_to_close_web"] = True
+    elif status == "queued" and not payload.get("remote_detached"):
+      # The launch-queue wait lives in a runner thread that died with the old
+      # process; nothing will ever grant this slot now.
+      payload["status"] = "failed"
+      payload["remote_stage"] = "queue_lost"
+      payload["failure_reason"] = (
+        "The server restarted while this job was waiting in the launch queue; submit it again."
+      )
     ensure_job_logging(payload)
     JOBS[job_id] = payload
 
@@ -1345,8 +1363,8 @@ def start_remote_monitor_thread(job: Dict[str, Any], remote_config: Dict[str, An
               and job.get("remote_tmux_session")
             ):
               job["auto_retry_count"] = int(job.get("auto_retry_count", 0) or 0) + 1
-              job["status"] = "running"
-              job["remote_stage"] = "auto_retry"
+              job["status"] = "queued"
+              job["remote_stage"] = "auto_retry_queued"
               job["monitor_state"] = "monitoring"
               append_job_log_line(
                 job,
@@ -1356,6 +1374,16 @@ def start_remote_monitor_thread(job: Dict[str, Any], remote_config: Dict[str, An
                 " relaunching the same remote script.\n",
               )
               persist_job_state(job)
+              # A failed retry straight onto a full GPU OOMs again — the
+              # relaunch goes through the same FIFO launch gate.
+              retry_granted = GPU_GATE.wait_for_slot(
+                job,
+                remote_config,
+                persist_fn=persist_job_state,
+                note_fn=lambda text: append_job_log_line(job, "stdout", f"[Queue] {text}\n"),
+              )
+              if not retry_granted:
+                break  # canceled while queued; wait_for_slot finalized the job
               try:
                 from web.server.remote_executor import relaunch_remote_tmux_job
                 relaunch_remote_tmux_job(
@@ -1366,8 +1394,10 @@ def start_remote_monitor_thread(job: Dict[str, Any], remote_config: Dict[str, An
                   runtime_log=str(job.get("remote_log_path", "")),
                   status_path=str(job.get("remote_status_path", "")),
                 )
+                GPU_GATE.launch_finished(job)
                 continue  # keep the same monitor polling the relaunched run
               except Exception as retry_exc:
+                GPU_GATE.launch_finished(job)
                 append_job_log_line(job, "stderr", f"[Auto-retry] relaunch failed: {retry_exc}\n")
                 job["status"] = "failed"
                 persist_job_state(job)
@@ -1437,6 +1467,60 @@ def start_remote_monitor_thread(job: Dict[str, Any], remote_config: Dict[str, An
       job["_monitoring"] = False
 
   threading.Thread(target=monitor, daemon=True).start()
+
+
+def start_scaffold_decode_thread(job: Dict[str, Any], remote_config: Dict[str, Any]) -> None:
+  """Decode a finished Scaffold-GS run's anchors into a standard PLY (thread).
+
+  Status lands in job["decode_state"] ("running" | "completed" | "failed") so
+  the runs drawer can show progress; the decode script text is read from
+  web/tools so the server always uploads the version it ships with.
+  """
+  if str(job.get("decode_state", "")) == "running":
+    return
+
+  def runner() -> None:
+    job["decode_state"] = "running"
+    job["decode_error"] = ""
+    append_job_log_line(job, "stdout", "[Scaffold-decode] decoding anchors into a standard Gaussian PLY.\n")
+    persist_job_state(job)
+    try:
+      script_path = Path(__file__).resolve().parents[1] / "tools" / "export_scaffold_gaussians.py"
+      result = decode_scaffold_anchor_ply(
+        remote_config=remote_config,
+        run_script_path=str(job.get("remote_run_script", "")),
+        decode_script_text=script_path.read_text(encoding="utf-8"),
+        log_callback=lambda channel, line: append_job_log_line(job, channel, line),
+      )
+      if not result.get("ok"):
+        job["decode_state"] = "failed"
+        job["decode_error"] = f"decoder exited with code {result.get('return_code')}; see the run log"
+        append_job_log_line(job, "stderr", f"[Scaffold-decode] failed: {job['decode_error']}\n")
+        persist_job_state(job)
+        return
+      job["decode_state"] = "completed"
+      job["decode_output"] = str(result.get("decoded_ply", ""))
+      append_job_log_line(
+        job, "stdout",
+        f"[Scaffold-decode] wrote {result.get('decoded_ply', '')}\n",
+      )
+      persist_job_state(job)
+      # Best effort: pull the new scene.ply down so the viewer URL flips to it.
+      try:
+        start_completed_result_download(job, remote_config)
+      except Exception as exc:  # pragma: no cover - download is optional here
+        append_job_log_line(
+          job, "stderr",
+          f"[Scaffold-decode] decode finished but the result download could not start: {exc}\n",
+        )
+        persist_job_state(job)
+    except Exception as exc:
+      job["decode_state"] = "failed"
+      job["decode_error"] = str(exc)[:500]
+      append_job_log_line(job, "stderr", f"[Scaffold-decode] failed: {exc}\n")
+      persist_job_state(job)
+
+  threading.Thread(target=runner, daemon=True).start()
 
 
 def job_matches_flow(job: Dict[str, Any], *, session_id: str, capture_id: str, selected_job_id: str) -> bool:
@@ -1714,13 +1798,24 @@ def start_remote_job_thread(
       job["remote_stage"] = "canceled"
       job["finished_at"] = time.time()
       return
-    job["status"] = "running"
-    job["started_at"] = time.time()
     job["metrics"] = {}
     job["stdout"] = ""
     job["stderr"] = ""
-    job["remote_stage"] = "queued"
     job["monitor_state"] = "starting"
+    persist_job_state(job)
+    # Launch queue: hold here as "queued" until a GPU slot frees up. A canceled
+    # job is finalized inside wait_for_slot, so a False return means stop.
+    queue_granted = GPU_GATE.wait_for_slot(
+      job,
+      remote_config,
+      persist_fn=persist_job_state,
+      note_fn=lambda text: append_job_log_line(job, "stdout", f"[Queue] {text}\n"),
+    )
+    if not queue_granted:
+      return
+    job["status"] = "running"
+    job["started_at"] = time.time()
+    job["remote_stage"] = "queued"
     persist_job_state(job)
     combined_log: list[str] = []
 
@@ -1816,6 +1911,7 @@ def start_remote_job_thread(
       merged_stderr = f"{job.get('stderr', '').rstrip()}\n{exc}".strip()
       job["stderr"] = merged_stderr[-12000:]
     finally:
+      GPU_GATE.launch_finished(job)
       if not job.get("remote_detached") or is_job_terminal(job):
         job["finished_at"] = time.time()
       persist_job_state(job)

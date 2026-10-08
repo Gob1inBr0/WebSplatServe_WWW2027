@@ -3930,3 +3930,224 @@ def remote_disk_probe(
       ) from exc
   finally:
     _close_ssh_resources(client)
+
+
+_GPU_PROBE_COMMAND = (
+  "nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu "
+  "--format=csv,noheader,nounits"
+)
+
+
+def parse_run_script_env(run_script_text: str) -> Dict[str, str]:
+  """Extract VAR=value lines from a generated run.sh (quotes stripped)."""
+  values: Dict[str, str] = {}
+  for raw_line in str(run_script_text).splitlines():
+    line = raw_line.strip()
+    if "=" not in line or line.startswith("#") or line.startswith("export "):
+      continue
+    name, _, value = line.partition("=")
+    name = name.strip()
+    if not name.replace("_", "").isalnum():
+      continue
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+      value = value[1:-1]
+    values[name] = value
+  return values
+
+
+def decode_scaffold_anchor_ply(
+  *,
+  remote_config: Dict[str, Any],
+  run_script_path: str,
+  decode_script_text: str,
+  iteration: int | None = None,
+  max_gaussians: int = 4_000_000,
+  log_callback: Callable[[str, str], None] | None = None,
+) -> Dict[str, Any]:
+  """Decode a Scaffold-GS anchor checkpoint into a standard PLY, on the server.
+
+  Drives web/tools/export_scaffold_gaussians.py inside the algorithm's own
+  venv: the run.sh written at submit time records PYTHON_BIN (the venv
+  wrapper), REMOTE_REPO_DIR and OUTPUT_DIR — everything the decoder needs.
+  """
+  validated = validate_remote_config(remote_config)
+  if not str(run_script_path or "").strip():
+    raise RemoteExecutionError(
+      "The job has no remote run script recorded; cannot locate the training environment.",
+      code_hint="WGSC-DECODE-RUNSCRIPT",
+      stage="scaffold_decode",
+    )
+
+  client = _new_ssh_client(validated)
+  sftp = None
+  try:
+    client.connect(
+      hostname=validated["host"],
+      port=validated["port"],
+      username=validated["username"],
+      **_connect_kwargs(validated),
+      timeout=20,
+    )
+    sftp = client.open_sftp()
+    run_script_text = _read_remote_text_file(sftp, run_script_path)
+    env = parse_run_script_env(run_script_text)
+    python_bin = env.get("PYTHON_BIN", "").strip()
+    repo_dir = env.get("REMOTE_REPO_DIR", "").strip()
+    output_dir = env.get("OUTPUT_DIR", "").strip()
+    missing = [
+      name for name, value in (
+        ("PYTHON_BIN", python_bin), ("REMOTE_REPO_DIR", repo_dir), ("OUTPUT_DIR", output_dir)
+      ) if not value
+    ]
+    if missing:
+      raise RemoteExecutionError(
+        f"run.sh is missing {', '.join(missing)}; cannot run the anchor decoder.",
+        code_hint="WGSC-DECODE-RUNSCRIPT-VARS",
+        stage="scaffold_decode",
+      )
+
+    job_dir = str(PurePosixPath(run_script_path).parent)
+    remote_script = f"{job_dir}/decode_scaffold.py"
+    _write_remote_text(sftp, remote_script, decode_script_text)
+
+    command_parts = [
+      python_bin, remote_script,
+      "--model-dir", output_dir,
+      "--repo", repo_dir,
+      "--max-gaussians", str(int(max_gaussians)),
+    ]
+    if iteration is not None:
+      command_parts += ["--iteration", str(int(iteration))]
+    command = " ".join(_quote(part) for part in command_parts)
+    return_code = _run_remote_command(client, command, log_callback)
+
+    decoded_ply = ""
+    point_cloud_root = f"{output_dir.rstrip('/')}/point_cloud"
+    try:
+      iteration_names = [
+        entry.filename for entry in sftp.listdir(point_cloud_root)
+        if entry.filename.startswith("iteration_")
+      ]
+      if iteration is not None:
+        wanted = [f"iteration_{int(iteration)}"]
+      else:
+        numbered = sorted(
+          (name for name in iteration_names if name[len("iteration_"):].isdigit()),
+          key=lambda name: int(name[len("iteration_"):]),
+        )
+        wanted = list(reversed(numbered))
+      for name in wanted:
+        candidate = f"{point_cloud_root}/{name}/scene.ply"
+        try:
+          sftp.stat(candidate)
+          decoded_ply = candidate
+          break
+        except FileNotFoundError:
+          continue
+    except FileNotFoundError:
+      pass
+
+    ok = return_code == 0 and bool(decoded_ply)
+    return {
+      "ok": ok,
+      "return_code": return_code,
+      "decoded_ply": decoded_ply,
+      "python_bin": python_bin,
+      "repo_dir": repo_dir,
+      "output_dir": output_dir,
+      "decode_script": remote_script,
+    }
+  finally:
+    _close_ssh_resources(client, sftp)
+
+
+def parse_gpu_report(raw_output: str) -> list[Dict[str, Any]]:
+  """Parse `nvidia-smi --query-gpu=... --format=csv,noheader,nounits` lines.
+
+  Malformed lines are skipped so a partially garbled probe still yields the
+  healthy cards; an empty result means the caller should treat GPUs as unknown.
+  """
+  gpus: list[Dict[str, Any]] = []
+  for raw_line in raw_output.splitlines():
+    line = raw_line.strip()
+    if not line:
+      continue
+    parts = [part.strip() for part in line.split(",")]
+    if len(parts) < 5:
+      continue
+    try:
+      index = int(parts[0])
+      used_mb = int(float(parts[2]))
+      total_mb = int(float(parts[3]))
+      utilization = int(float(parts[4]))
+    except ValueError:
+      continue
+    gpus.append({
+      "index": index,
+      "name": parts[1] or f"GPU {index}",
+      "used_mb": max(0, used_mb),
+      "total_mb": max(0, total_mb),
+      "free_mb": max(0, total_mb - used_mb),
+      "utilization_pct": max(0, min(100, utilization)),
+    })
+  gpus.sort(key=lambda item: item["index"])
+  return gpus
+
+
+def remote_gpu_probe(
+  *,
+  remote_config: Dict[str, Any],
+  timeout_seconds: int = 12,
+) -> list[Dict[str, Any]]:
+  """SSH in and read per-GPU memory/utilization via nvidia-smi.
+
+  Needs only connection fields. Raises RemoteExecutionError when the host is
+  unreachable or nvidia-smi is missing — callers decide their own fail-open or
+  fail-closed behavior (the launch queue fails open so a broken probe never
+  freezes submissions).
+  """
+  host = str(remote_config.get("host", "")).strip()
+  if not host:
+    raise RemoteExecutionError(
+      "Remote host is required for the GPU probe.",
+      code_hint="WGSC-QUEUE-PROBE-001",
+      stage="gpu_probe",
+    )
+  validated = {
+    "host": host,
+    "port": int(remote_config.get("port", 22) or 22),
+    "username": str(remote_config.get("username", "")).strip() or "root",
+    "password": remote_config.get("password", ""),
+    "key_path": str(remote_config.get("key_path", "") or "").strip(),
+  }
+  paramiko = _load_paramiko()
+  client = _new_ssh_client(validated)
+  try:
+    try:
+      client.connect(
+        hostname=validated["host"],
+        port=validated["port"],
+        username=validated["username"],
+        **_connect_kwargs(validated),
+        timeout=timeout_seconds,
+      )
+      _, stdout, stderr = client.exec_command(_GPU_PROBE_COMMAND, timeout=timeout_seconds)
+      output = stdout.read().decode("utf-8", "replace")
+      err_text = stderr.read().decode("utf-8", "replace")
+      status = stdout.channel.recv_exit_status()
+      if status != 0 and not output.strip():
+        raise RemoteExecutionError(
+          f"GPU probe command failed: {err_text.strip()[:200] or 'nvidia-smi not available'}",
+          code_hint="WGSC-QUEUE-PROBE-002",
+          stage="gpu_probe",
+        )
+      return parse_gpu_report(output)
+    except paramiko.AuthenticationException as exc:
+      raise RemoteExecutionError(
+        "SSH authentication failed. Check remote username/password.",
+        code_hint="WGSC-STEP4-SSH-AUTH-001",
+        stage="connect",
+      ) from exc
+  finally:
+    _close_ssh_resources(client)

@@ -2,7 +2,7 @@
 
 import { store, navigate, runName, isTerminal, pollOnce, toast, remoteConfig, hasPassword, setRunName } from "../store.js";
 import { t } from "../i18n.js";
-import { getJob, getJobLogDelta, getJobLogsPage, cancelJob, deleteJob, checkResult, downloadResult, redownloadResult, jobLogDownloadUrl, jobMetricsCsvUrl } from "../api.js";
+import { getJob, getJobLogDelta, getJobLogsPage, cancelJob, decodeAnchorPly, deleteJob, checkResult, downloadResult, redownloadResult, jobLogDownloadUrl, jobMetricsCsvUrl } from "../api.js";
 import { formatBytes, formatTime } from "../components/ui.js";
 
 const { ref, computed, onMounted, onUnmounted, watch } = Vue;
@@ -165,6 +165,40 @@ export default {
       finally { drawerBusy.value = false; }
     }
 
+    const decodeBusy = ref(false);
+    const canDecode = (job) => {
+      if (!job || !isTerminal(job)) return false;
+      if (String(job.algorithm_family || "") !== "scaffold-gs") return false;
+      return ["completed", "partial_success", "training_success_render_failed",
+        "training_success_metrics_failed", "training_success_postprocess_failed"]
+        .includes(String(job.status));
+    };
+
+    async function doDecode() {
+      if (!hasPassword()) { toast(t("runs.needPasswordDownload"), "error", 7000); return; }
+      decodeBusy.value = true;
+      try {
+        await decodeAnchorPly(drawerId.value, remoteConfig());
+        toast(t("runs.decodeStarted"), "info");
+        // Decoding a run takes one to a few minutes; poll the job until it settles.
+        for (let attempt = 0; attempt < 100; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+          await loadDetail();
+          const state = drawerJob.value?.decode_state;
+          if (state === "completed") { toast(t("runs.decodeDone"), "success"); break; }
+          if (state === "failed") {
+            toast(`${t("runs.decodeFailedLabel")} ${drawerJob.value?.decode_error || ""}`, "error", 8000);
+            break;
+          }
+        }
+      } catch (err) { toast(`${t("runs.decodeFailedLabel")} ${err.message}`, "error", 8000); }
+      finally {
+        decodeBusy.value = false;
+        await loadDetail();
+        pollOnce();
+      }
+    }
+
     async function doDelete() {
       if (!confirm(t("runs.deleteConfirm"))) return;
       drawerBusy.value = true;
@@ -201,6 +235,7 @@ export default {
       store, filter, filtered, drawerId, drawerJob, drawerName, logText, metricsSeries,
       renderImages, downloadPct, breakPath, drawerBusy, formatBytes, formatTime, jobLogDownloadUrl,
       openDrawer, closeDrawer, doCancel, doDownload, doDelete, renameRun, openInViewer, openImage, navigate, pollOnce, isTerminal, runName,
+      decodeBusy, canDecode, doDecode,
     };
   },
   template: `
@@ -305,6 +340,10 @@ export default {
             <template v-else>
               <ui-button variant="primary" icon="download" :loading="drawerBusy" @click="doDownload(false)">{{ $t("runs.downloadResults") }}</ui-button>
               <ui-button icon="rotate" :loading="drawerBusy" @click="doDownload(true)">{{ $t("runs.redownload") }}</ui-button>
+              <ui-button v-if="canDecode(drawerJob) && drawerJob.decode_state !== 'completed'"
+                         icon="box" :loading="decodeBusy" @click="doDecode">
+                {{ drawerJob.decode_state === 'running' ? $t("runs.decoding") : $t("runs.decodeAnchors") }}
+              </ui-button>
               <ui-button v-if="drawerJob.point_cloud_url || drawerJob.viewer_url" icon="box" @click="openInViewer">{{ $t("runs.view3d") }}</ui-button>
             </template>
             <span style="flex:1"></span>
