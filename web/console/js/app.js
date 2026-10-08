@@ -52,6 +52,11 @@ const App = {
       return profile ? (profile.label || profile.host || t("nav.noLabel")) : t("nav.noProfile");
     });
     const pageTitle = computed(() => t(PAGE_TITLES[store.route.page] || ""));
+    // The deployment-data page is developer-only: it exists as a nav entry on
+    // the --admin server instance, whose served HTML sets __WEBSCAN_ADMIN__.
+    const visibleNav = computed(() =>
+      NAV.filter((item) => item.page !== "deploy" || window.__WEBSCAN_ADMIN__ === true),
+    );
     const serverStopping = Vue.ref(false);
     async function shutdownServer() {
       if (!confirm(t("common.shutdownConfirm"))) return;
@@ -71,7 +76,7 @@ const App = {
       startPolling();
       checkHealth();
     });
-    return { store, navigate, NAV, runningCount, profileLabel, pageTitle, t, toggleLocale, shutdownServer, serverStopping };
+    return { store, navigate, NAV, visibleNav, runningCount, profileLabel, pageTitle, t, toggleLocale, shutdownServer, serverStopping };
   },
   template: `
     <div class="shell">
@@ -85,7 +90,7 @@ const App = {
         </div>
         <nav class="nav-group">
           <div class="nav-label">{{ t("nav.workspace") }}</div>
-          <button v-for="item in NAV" :key="item.page" class="nav-item"
+          <button v-for="item in visibleNav" :key="item.page" class="nav-item"
                   :class="{ active: store.route.page === item.page }"
                   @click="navigate(item.page)">
             <icon :name="item.icon"></icon>

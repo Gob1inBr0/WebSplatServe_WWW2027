@@ -23,6 +23,7 @@ const LABELS = {
     benchHint: "harness runs, kept separate",
     quality: "Experience metrics",
     metric: "Metric",
+    adminOnly: "Deployment data is served by the developer admin instance only (start the server with --admin on a separate port).",
     samples: "n",
     stage: "Load stages",
     dist: "Distributions",
@@ -70,6 +71,7 @@ const LABELS = {
     benchHint: "采集壳运行，单独统计",
     quality: "体验指标",
     metric: "指标",
+    adminOnly: "部署数据只在开发者实例开放：用 --admin 参数在另一个端口启动服务即可进入。",
     samples: "次数",
     stage: "加载阶段",
     dist: "分布",
@@ -112,9 +114,13 @@ export default {
   setup() {
     const summary = ref(null);
     const loading = ref(false);
+    // Deep-link guard: on a user-facing instance the endpoint does not exist,
+    // so show the notice instead of a fetch error.
+    const notAdmin = window.__WEBSCAN_ADMIN__ !== true;
     const L = (key) => (LABELS[store.locale === "zh" ? "zh" : "en"] || LABELS.en)[key] || key;
 
     async function load() {
+      if (notAdmin) return;
       loading.value = true;
       try {
         const headers = {};
@@ -203,7 +209,7 @@ export default {
     onMounted(load);
 
     return {
-      store, summary, loading, load, openEvidence, L,
+      store, summary, loading, load, openEvidence, notAdmin, L,
       stageRows, failRows, policyRows, profileRows, capabilityRows, scaleRows,
       browserRows, osRows, deviceRows, metricRows, http, serving, recentFailures,
       fmtStat, fmtBytes, fmtTime, pctText,
@@ -222,14 +228,23 @@ export default {
         </div>
       </div>
 
-      <div class="grid-4" style="margin-bottom:20px">
+      <div class="card" v-if="notAdmin" style="margin-bottom:20px;border-color:var(--accent-border)">
+        <div class="card-body row-wrap" style="justify-content:space-between">
+          <div class="row" style="gap:12px">
+            <icon name="info" style="width:18px;height:18px;color:var(--accent)"></icon>
+            <div class="small">{{ L("adminOnly") }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-4" style="margin-bottom:20px" v-if="!notAdmin">
         <ui-stat :label="L('loads')" :value="serving.loads ?? '–'" :hint="L('loadsHint')" />
         <ui-stat :label="L('failRate')" :value="summary ? pctText(serving.failure_rate) : '–'" :hint="L('failRateHint')" />
         <ui-stat :label="L('clients')" :value="serving.unique_clients ?? '–'" :hint="L('clientsHint')" />
         <ui-stat :label="L('bench')" :value="serving.benchmark_loads ?? '–'" :hint="L('benchHint')" />
       </div>
 
-      <div class="grid-2" style="margin-bottom:20px">
+      <div class="grid-2" style="margin-bottom:20px" v-if="!notAdmin">
         <ui-card :title="L('quality')" dense>
           <table class="tbl" v-if="summary">
             <thead>
@@ -269,7 +284,7 @@ export default {
         </div>
       </div>
 
-      <div class="grid-2" style="margin-bottom:20px">
+      <div class="grid-2" style="margin-bottom:20px" v-if="!notAdmin">
         <ui-card :title="L('dist')" dense>
           <div class="card-body" style="padding-top:2px">
             <div class="small muted" style="margin-bottom:4px">{{ L('policy') }}</div>
@@ -331,7 +346,7 @@ export default {
         </div>
       </div>
 
-      <ui-card :title="L('recent')" dense>
+      <ui-card :title="L('recent')" dense v-if="!notAdmin">
         <div class="card-body" style="padding-top:2px">
           <div v-if="!recentFailures.length" class="small muted">{{ L('noFailures') }}</div>
           <table v-else class="tbl">

@@ -1935,6 +1935,13 @@ def _create_env_setup_job(
 
 
 
+# Set by main() from the --admin flag. The developer admin instance (run on a
+# separate port) is the only one that serves the deployment-data console page
+# and the telemetry summary/evidence endpoints; user-facing instances answer
+# 404 so deployment evidence stays off the public deployment entirely.
+ADMIN_MODE = False
+
+
 class ApiHandler(SimpleHTTPRequestHandler):
   def __init__(self, *args, **kwargs):
     self._req_start = time.time()
@@ -2055,7 +2062,12 @@ class ApiHandler(SimpleHTTPRequestHandler):
       self.send_error(HTTPStatus.NOT_FOUND)
       return
     token = SECURITY_STATE["token"] if SECURITY_STATE["auth_enabled"] else ""
-    snippet = f"<script>window.__WEBSCAN_API_TOKEN__ = {json.dumps(token)};</script>"
+    snippet = (
+      f"<script>window.__WEBSCAN_API_TOKEN__ = {json.dumps(token)};"
+      f"window.__WEBSCAN_ADMIN__ = {json.dumps(bool(ADMIN_MODE))};"
+      'window.addEventListener("error",function(e){(window.__pageErrors=window.__pageErrors||[])'
+      ".push(String(e.message))});</script>"
+    )
     if "</head>" in html:
       html = html.replace("</head>", f"  {snippet}\n</head>", 1)
     else:
@@ -2131,11 +2143,18 @@ class ApiHandler(SimpleHTTPRequestHandler):
       })
       return
     if parsed.path == "/api/telemetry/summary":
-      # Operator-only (every /api GET is token-gated): deployment evidence for
-      # the paper — sessions, loads, bytes, latency, failure rates, uptime.
+      # Operator-only: token-gated like every /api GET, and additionally only
+      # served by the --admin instance (404 elsewhere, so the deployment
+      # evidence endpoints do not exist on the user-facing deployment).
+      if not ADMIN_MODE:
+        json_response(self, {"ok": False, "error": "Not found"}, status=404)
+        return
       json_response(self, {"ok": True, "summary": get_telemetry().summary()})
       return
     if parsed.path == "/api/telemetry/evidence.md":
+      if not ADMIN_MODE:
+        self.send_error(HTTPStatus.NOT_FOUND)
+        return
       from web.tools.collect_deployment_evidence import build_markdown
       body = build_markdown(get_telemetry().summary()).encode("utf-8")
       self.send_response(HTTPStatus.OK)
@@ -4039,8 +4058,15 @@ def main() -> None:
     default="",
     help="Comma-separated extra Host values to accept, e.g. --allowed-host 192.168.1.10,myserver.local (for LAN access).",
   )
+  parser.add_argument(
+    "--admin",
+    action="store_true",
+    help="Run the developer admin instance on a separate port: serves the deployment-data console page and /api/telemetry/summary (404 on non-admin instances).",
+  )
   args = parser.parse_args()
 
+  global ADMIN_MODE
+  ADMIN_MODE = bool(args.admin)
   token = ensure_server_token(args.token)
   SECURITY_STATE["auth_enabled"] = not args.no_auth
   extra_hosts = [item for item in load_security_config().get("allowed_hosts", []) if isinstance(item, str)]
@@ -4048,7 +4074,9 @@ def main() -> None:
   SECURITY_STATE["allowed_host_values"] = allowed_host_values(args.host, args.port, extra_hosts)
 
   load_persisted_jobs()
-  pid_file = WEB_DIR / "generated" / "server.pid"
+  # Separate pid file so the admin instance never becomes the shutdown target
+  # of the user-facing instance's console button (and vice versa).
+  pid_file = WEB_DIR / "generated" / ("server.admin.pid" if ADMIN_MODE else "server.pid")
   try:
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
@@ -4060,6 +4088,8 @@ def main() -> None:
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
   )
   print(f"Serving web app at http://{args.host}:{args.port}/web/")
+  if ADMIN_MODE:
+    print("ADMIN instance: deployment-data page and /api/telemetry/summary are enabled here only.")
   if SECURITY_STATE["auth_enabled"]:
     # stdout/stderr may be redirected to a file; never print the full token
     # there. The scripts echo the token to the interactive terminal instead.
@@ -4074,6 +4104,7 @@ def main() -> None:
     host=args.host,
     port=args.port,
     auth_enabled=SECURITY_STATE["auth_enabled"],
+    admin=ADMIN_MODE,
   )
   server.serve_forever()
 
