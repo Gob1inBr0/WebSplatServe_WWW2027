@@ -1,5 +1,7 @@
 # WebSplatServe WWW 2027 Industry Track Experiment Plan
 
+> 中文版：[EXPERIMENT_PLAN_ZH.md](EXPERIMENT_PLAN_ZH.md)
+
 ## Goal
 
 WebSplatServe evaluates Web-native 3D Gaussian serving instead of only offline compression quality.  The core question is whether a browser can show a usable scene sooner and remain interactive under heterogeneous network, viewport and GPU constraints.

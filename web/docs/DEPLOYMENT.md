@@ -1,5 +1,7 @@
 # Deployment Guide (WebGS P1)
 
+> 中文版：[DEPLOYMENT_ZH.md](DEPLOYMENT_ZH.md)
+
 How to run Web_Scan as a publicly reachable serving demo and collect the
 operational telemetry that the WWW Industry Track submission needs as
 deployment evidence. Everything below works with zero code changes; the

@@ -1,5 +1,7 @@
 # WebSplatServe_WWW2027
 
+> 中文版：[README_ZH.md](README_ZH.md)
+
 WebSplatServe is a WWW 2027 Industry Track oriented rebuild of the original `Web_Scan-feat-survey-algorithms` web platform.  It keeps the old browser workbench, Python API server, adapter registry, remote execution flow, telemetry store and progressive viewer, then adds a Web-native serving layer for adaptive 3D Gaussian delivery.
 
 ## Paper Positioning

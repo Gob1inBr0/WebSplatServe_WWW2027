@@ -1,5 +1,7 @@
 # WebScan Console
 
+> 中文版：[README_ZH.md](README_ZH.md)
+
 The new frontend for Web_Scan — a rebuilt, focused UI for the remote 3DGS
 training workflow. Served by the same server as the legacy UI:
 

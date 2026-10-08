@@ -1,5 +1,7 @@
 # WebSplatServe Run Scripts
 
+> 中文版：[README_ZH.md](README_ZH.md)
+
 Run scripts from the project root:
 
 ```powershell

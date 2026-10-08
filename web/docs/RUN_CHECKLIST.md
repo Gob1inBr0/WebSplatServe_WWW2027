@@ -1,5 +1,7 @@
 # WebSplatServe Run Checklist
 
+> 中文版：[RUN_CHECKLIST_ZH.md](RUN_CHECKLIST_ZH.md)
+
 ## 0. Numbered Scripts
 
 The root `scripts/` directory contains the ordered run scripts:

@@ -1,5 +1,7 @@
 # Gaussian Encoding Web Platform
 
+> 中文版：[README_ZH.md](README_ZH.md)
+
 ## Overview
 
 This folder provides a standalone web platform that serves as a unified visualization entrypoint for various Gaussian encoding and reconstruction algorithms.
