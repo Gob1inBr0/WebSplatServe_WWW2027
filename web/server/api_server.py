@@ -69,7 +69,6 @@ from web.server.remote_executor import (
   download_remote_output_directory,
   poll_remote_detached_job,
   remote_disk_probe,
-  remote_gpu_reset,
   remote_list_datasets,
   remote_preflight_check,
   repair_remote_job_metrics,
@@ -2940,45 +2939,6 @@ class ApiHandler(SimpleHTTPRequestHandler):
         cleared += 1
       json_response(self, {"ok": True, "cleared": cleared})
       return
-    if parsed.path == "/api/remote/gpu-reset":
-      # Operator action from Settings: force-kill every GPU compute process on
-      # the server (the GPU keeper included, watcher first so workers do not
-      # respawn), clear the platform's leftover tmux sessions, then mark this
-      # server's in-flight jobs failed. Destructive by design — it also stops
-      # other projects' jobs sharing the cards; the console confirms first.
-      try:
-        remote_config_input = extract_remote_config_input(payload)
-        reset_host = str(remote_config_input.get("host", "")).strip()
-        report = remote_gpu_reset(
-          remote_config=remote_config_input,
-          timeout_seconds=int(payload.get("timeout_seconds", 25) or 25),
-        )
-      except RemoteExecutionError as exc:
-        error_response(
-          self,
-          code=exc.code_hint or "WGSC-GPU-RESET-001",
-          step="gpu_reset",
-          message=str(exc),
-          reason=f"stage={exc.stage or 'unknown'}",
-          status=400,
-        )
-        return
-      marked = 0
-      for job in JOBS.values():
-        if str(job.get("status", "")).lower() not in ("running", "queued", "launching", "detached", "pending"):
-          continue
-        job_remote = job.get("remote") if isinstance(job.get("remote"), dict) else {}
-        job_host = str(job_remote.get("host", "")).strip()
-        if reset_host and job_host and job_host != reset_host:
-          continue
-        job["status"] = "failed"
-        job["failure_reason"] = "Server GPUs were force-reset from Settings (operator action)."
-        job["finished_at"] = time.time()
-        persist_job_state(job)
-        marked += 1
-      json_response(self, {"ok": True, "reset": report, "jobs_marked_failed": marked})
-      return
-
     if parsed.path == "/api/remote-check":
       try:
         remote_config_input = extract_remote_config_input(payload)
