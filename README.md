@@ -168,6 +168,23 @@ The viewer classifies the device before loading and adapts while playing:
 - The HUD shows policy, profile, the live row cap with up/down step counters,
   TTFR, resident vertices, downloaded bytes, bandwidth estimate and FPS/P95.
 
+## Batch Campaigns (training matrix on a GPU server)
+
+For full-matrix campaigns (scenes × algorithms), a remote campaign runner
+lives on the GPU server (`scripts/campaign_runner.py` is the source copy):
+it queues jobs, pins each launch to the GPU with most free memory (in-flight
+reservations included), launches via tmux, reaps exit codes, runs metrics,
+appends `campaign_results.csv` and handles dependency chains (e.g.
+LightGaussian after a vanilla checkpoint run). The local console queue stays
+disabled during campaigns; the server-side loop keeps running regardless of
+the local machine.
+
+Serving-layer evaluation (the WWW 2027 innovation evidence) is planned in
+`docs/服务评测-测试设计方案.md`: four layers — progressive export validation,
+a 4320-row policy × network simulation matrix, sampled real-browser runs
+with client profiles and runtime adaptation, and evidence aggregation into
+paper tables T1–T3 / F1–F3.
+
 ## Test
 
 Run only the new scheduler tests:

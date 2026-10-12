@@ -102,6 +102,12 @@ http://127.0.0.1:8080/web/viewers/benchmark.html?url=/web/generated/websplatserv
 
 ## 5. 导出部署证据
 
+完整的服务评测战役（导出 → 模拟 → 浏览器 → 汇总）按
+`docs/服务评测-测试设计方案.md` 执行；模拟与导出阶段由
+`scripts/campaign_runner.py` 在 GPU 服务器上运行。
+
+带鉴权的接口（普通实例返回 404）：
+
 开发者实例上带鉴权的接口（普通实例返回 404）：
 
 ```text

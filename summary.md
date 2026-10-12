@@ -921,3 +921,37 @@ powershell -ExecutionPolicy Bypass -File scripts/10_smoke_local_pipeline.ps1
 ### 验证与提交
 
 单元测试更新后 14 个模块全过；浏览器端到端验证包括：首帧/完整/失败三类事件的落盘字段、双实例隔离、自适应升降与对照组、真实显卡识别（M5 归高端档）。相关提交：6f51761（遥测+部署页）、9717362（admin 分离）、475cf8e（画像 v2）。文档同步更新：主 README、控制台 README 双语、实验计划双语、运行清单双语、脚本 README 双语。
+
+## 2026-10-09 ~ 10-11 训练战役：远端执行器重构与 tt/360 矩阵
+
+### 客户端画像 v2 与部署数据页（补记）
+
+- 部署数据页（admin 实例专属）+ 帧率上报补全 + 失败枚举 + 场景规模分桶（详见 2026-10-08 条目）。
+- 画像探测升级：显卡型号关键词参与分档（仅本地使用）、CPU 核数启用、iPadOS 识别；运行时自适应（帧率驱动点数上限升降，滞回+频率限制），上报 cap_initial/cap_final/adapt_up/adapt_down。真实浏览器 60 万点场景实测：安卓档上限顶住后自动上调并跑完全场。
+- 中途做过一个"服务器 GPU 重置"按钮后按用户要求移除（共享服务器上危险大于便利）；同批保留了两个真修复：数据盘探测的扁平参数解析、无 Notification API 浏览器的渲染保护。
+- 设置页新增"清除训练记录"（逻辑删除，与清浏览记录同义：列表清空、磁盘产物保留、接口可找回）。
+
+### GPU 队列潜在 bug 修复
+
+排队闸门的等待线程以无参形式调用持久化函数（实际签名需要 job），等待线程一进队即崩——排队功能此前从未真正放行过任务。改为闭包传参后，队列首次真实运转。
+
+### 训练战役架构重构：远端执行器（本阶段核心）
+
+用 tt/tandt/360 三族 9 场景 × 20 算法跑完整矩阵时，本地平台中心架构被证明不可用：Mac 休眠杀死本地服务（队列停摆 7 小时）、监控线程在 SSH 连接风暴中批量死亡（任务僵死在"运行中"）、取消/重挂接口只认密码不认密钥形成死锁。三次停摆后整体重构：
+
+- **调度循环常驻 GPU 服务器**（`scripts/campaign_runner.py`，服务器副本 /home/T0ng/campaign_runner.py）：8 槽位队列、按空闲显存选卡（含在途预留扣减）、tmux 启动、退出码收割、metrics.py 出分、结果表 campaign_results.csv 追加、lightgaussian 依赖链（检查点任务先行）、kitchen 门控（等 COLMAP）。本地断联/休眠不影响任何流程，本地平台队列禁用、只作观察。
+- 教训固化进执行器与运维脚本：tmux 清理会误杀在跑会话（清理跳过 camp-/wgsc- 前缀）、失败任务需从完成集合移除才会重跑、远端目录退出码标记是僵死任务的对账通道。
+
+### kitchen COLMAP 攻坚
+
+kitchen 的 COLMAP 连续崩溃（段错误/中止），逐层定位：COLMAP 特征提取启动需创建 OpenGL 上下文，服务器当前图形环境对其不可用。解法：纯 CPU SIFT（--SiftExtraction.use_gpu 0 / --SiftMatching.use_gpu 0，该版本参数带命名空间）+ QT_QPA_PLATFORM 走 xcb。COLMAP 完成后执行器自动放行 kitchen 任务。
+
+### 内存盘危机与清理
+
+全矩阵产物堆内存盘一度到 95%（297/315GB），写失败风险下定向清理 276 个已完成运行的点云与渲染目录，释放 148GB（至 48%）；指标文件与未消费的检查点保留。
+
+### 战役结果与产出
+
+- 矩阵 180 任务全部完成（含 lightgaussian 压轴波；sog、octree-gs、fcgs、gaussianspa 为已知问题家族，失败记录在案）。
+- 结果表 campaign_results.csv：PSNR/SSIM/LPIPS/PLY 体积 per 场景×算法；指标文件（results.json/per_view.json）持续收割本地 web/generated/campaign_results/（112+ 文件）。
+- 途中两次内存盘 95% 危机均定向清理解决；占卡进程两次更换马甲（gpu_keeper_worker → hold-extra.py）均按授权清除。

@@ -58,6 +58,15 @@ Notes:
 - If you already have a standard SH PLY, start at `04_export_scene.ps1`.
 - Browser QoE benchmark does not run image-quality evaluation.
 - `10_smoke_local_pipeline.ps1` generates a synthetic SH PLY under `%TEMP%`, exports assets there, and runs scheduler/benchmark scripts without requiring a real scene or write access to `web/generated`.
+- Training-matrix campaign runner (`campaign_runner.py` in this folder —
+  the live copy runs on the GPU server at `/home/T0ng/campaign_runner.py`):
+  queue (8 slots), per-GPU picking with in-flight reservations, tmux
+  launches, exit-code reaping, metrics.py, `campaign_results.csv`, and
+  dependency chains (LightGaussian after a vanilla checkpoint run). Start it
+  on the server with `/home/T0ng/start_runner.sh`; state in
+  `/home/T0ng/campaign/state.json`, results in
+  `/home/T0ng/campaign/campaign_results.csv`.
+
 - Developer admin instance (deployment-data page + telemetry evidence endpoints, 404 elsewhere): start it separately on another port, ideally loopback-only:
 
   ```bash

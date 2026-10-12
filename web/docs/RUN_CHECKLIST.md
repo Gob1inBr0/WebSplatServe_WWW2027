@@ -105,6 +105,12 @@ The browser benchmark records TTFR, downloaded bytes, resident rows, chunk arriv
 
 ## 5. Export Deployment Evidence
 
+For the full serving-evaluation campaign (export -> simulation -> browser ->
+aggregation), follow `docs/服务评测-测试设计方案.md`; the simulation and
+export stages run on the GPU server via `scripts/campaign_runner.py`.
+
+Authenticated endpoint:
+
 On the admin instance (authenticated; 404 on user-facing instances):
 
 ```text

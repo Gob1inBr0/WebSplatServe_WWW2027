@@ -58,6 +58,8 @@ bash scripts/10_smoke_local_pipeline.sh
 - 如果已经有标准的 SH PLY，直接从 `04_export_scene.ps1` 开始。
 - 浏览器 QoE 基准测试不做图像质量评估。
 - `10_smoke_local_pipeline.ps1` 会在临时目录（`%TEMP%`）下生成一个合成的 SH PLY，在那里导出资源，并运行调度器/基准脚本，不需要真实场景，也不需要 `web/generated` 的写权限。
+- 训练矩阵战役执行器（`campaign_runner.py`，本目录为源码副本——线上运行副本在 GPU 服务器 `/home/T0ng/campaign_runner.py`）：8 槽位队列、按空闲显存选卡（含在途预留）、tmux 启动、退出码收割、metrics 出分、`campaign_results.csv` 结果表、依赖链（LightGaussian 在 vanilla 检查点之后）。服务器上用 `/home/T0ng/start_runner.sh` 启动；状态在 `/home/T0ng/campaign/state.json`，结果在 `/home/T0ng/campaign/campaign_results.csv`。
+
 - 开发者实例（部署数据页和遥测证据接口只在这里开放，其他实例返回 404）：单独用另一个端口启动，建议只绑本机回环：
 
   ```bash

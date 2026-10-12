@@ -62,6 +62,14 @@ http://127.0.0.1:8080/web/viewers/benchmark.html?url=/web/generated/websplatserv
 
 The page runs the selected policies in a same-origin iframe and exports TTFR, downloaded bytes, resident rows, chunk arrivals, FPS, P95 frame time, client profile and capability data.
 
+## Full Evaluation Campaign
+
+The concrete test design for the full serving evaluation — export validation,
+the 4320-run simulation matrix, sampled real-browser runs, acceptance
+criteria and limitations — lives in `docs/服务评测-测试设计方案.md`
+(serving evaluation test design, v2). It runs on the GPU server via
+`scripts/campaign_runner.py`; only the browser layer needs a local machine.
+
 ## Deployment Evidence
 
 During a public or internal deployment, keep anonymous telemetry enabled.  The summary and evidence endpoints exist only on the `--admin` server instance (run it on a separate, loopback-bound port); user-facing instances answer 404.  Pull `/api/telemetry/summary` from the admin instance, save it as JSON, then generate a paper-ready note — or just click the download button on the console's Deployment Data page:

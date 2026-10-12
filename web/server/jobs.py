@@ -1390,7 +1390,7 @@ def start_remote_monitor_thread(job: Dict[str, Any], remote_config: Dict[str, An
               retry_granted = GPU_GATE.wait_for_slot(
                 job,
                 remote_config,
-                persist_fn=persist_job_state,
+                persist_fn=lambda: persist_job_state(job),
                 note_fn=lambda text: append_job_log_line(job, "stdout", f"[Queue] {text}\n"),
               )
               if not retry_granted:
@@ -2079,7 +2079,7 @@ def start_remote_job_thread(
     queue_granted = GPU_GATE.wait_for_slot(
       job,
       remote_config,
-      persist_fn=persist_job_state,
+      persist_fn=lambda: persist_job_state(job),
       note_fn=lambda text: append_job_log_line(job, "stdout", f"[Queue] {text}\n"),
     )
     if not queue_granted:
